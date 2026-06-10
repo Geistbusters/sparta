@@ -960,7 +960,7 @@ int SurfReactAdsorb::react(Particle::OnePart *&ip, int isurf, double *norm,
           else jp_species = r->products[1];
 
           int reallocflag =
-            particle->add_particle(id,jp_species,ip->icell,x,v,0.0,0.0);
+            particle->add_particle(id,jp_species,ip->icell,x,v,0.0,0.0,0.0);
           if (reallocflag) ip = particle->particles + (ip - particles);
           jp = &particle->particles[particle->nlocal-1];
           return (list[i] + 1);
@@ -1012,7 +1012,7 @@ int SurfReactAdsorb::react(Particle::OnePart *&ip, int isurf, double *norm,
 
                     int reallocflag =
                       particle->add_particle(id,r->products[j],ip->icell,
-                                             x,v,0.0,0.0);
+                                             x,v,0.0,0.0,0.0);
                     if (reallocflag) ip = particle->particles + (ip - particles);
                     jp = &particle->particles[particle->nlocal-1];
 
@@ -1031,7 +1031,7 @@ int SurfReactAdsorb::react(Particle::OnePart *&ip, int isurf, double *norm,
 
                     int reallocflag =
                       particle->add_particle(id,r->products[j],ip->icell,
-                                             x,v,0.0,0.0);
+                                             x,v,0.0,0.0,0.0);
                     if (reallocflag) ip = particle->particles + (ip - particles);
                     jp = &particle->particles[particle->nlocal-1];
 
@@ -1104,7 +1104,7 @@ int SurfReactAdsorb::react(Particle::OnePart *&ip, int isurf, double *norm,
 
             if (r->stoich_products[0] == 2) {
               int reallocflag =
-                particle->add_particle(id,r->products[0],ip->icell,x,v,0.0,0.0);
+                particle->add_particle(id,r->products[0],ip->icell,x,v,0.0,0.0,0.0);
               if (reallocflag) ip = particle->particles + (ip - particles);
               jp = &particle->particles[particle->nlocal-1];
 
@@ -1113,7 +1113,7 @@ int SurfReactAdsorb::react(Particle::OnePart *&ip, int isurf, double *norm,
                                                r->cmodel_ip_coeffs);
             } else {
               int reallocflag =
-                particle->add_particle(id,r->products[1],ip->icell,x,v,0.0,0.0);
+                particle->add_particle(id,r->products[1],ip->icell,x,v,0.0,0.0,0.0);
               if (reallocflag) ip = particle->particles + (ip - particles);
               jp = &particle->particles[particle->nlocal-1];
 
@@ -1364,7 +1364,7 @@ void SurfReactAdsorb::PS_chemistry()
       else icell = update->split2d(icell,x);
     }
 
-    particle->add_particle(p->id,p->ispecies,icell,p->x,p->v,p->erot,p->evib);
+    particle->add_particle(p->id,p->ispecies,icell,p->x,p->v,p->erot,p->evib,p->eelec);
     particle->particles[particle->nlocal-1].dtremain = p->dtremain;
   }
 }
@@ -3001,7 +3001,7 @@ void SurfReactAdsorb::PS_react(int isurf, int isc, double *norm)
             random_point(isurf,x);
             v[0] = v[1] = v[2] = 0.0;
 
-            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0);
+            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0,0.0);
             p = &particle->particles[particle->nlocal-1];
             p->dtremain = update->dt*random->uniform();
 
@@ -3026,7 +3026,7 @@ void SurfReactAdsorb::PS_react(int isurf, int isc, double *norm)
             random_point(isurf,x);
             v[0] = v[1] = v[2] = 0.0;
 
-            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0);
+            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0,0.0);
             p = &particle->particles[particle->nlocal-1];
             p->dtremain = update->dt*random->uniform();
 
@@ -3056,7 +3056,7 @@ void SurfReactAdsorb::PS_react(int isurf, int isc, double *norm)
             random_point(isurf,x);
             v[0] = v[1] = v[2] = 0.0;
 
-            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0);
+            particle->add_particle(pid,r->products[0],0,x,v,0.0,0.0,0.0);
             p = &particle->particles[particle->nlocal-1];
             p->dtremain = update->dt*random->uniform();
 

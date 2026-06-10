@@ -57,11 +57,12 @@ void ReactQK::init()
 /* ---------------------------------------------------------------------- */
 
 int ReactQK::attempt(Particle::OnePart *ip, Particle::OnePart *jp,
-                     double pre_etrans, double pre_erot, double pre_evib,
+                     double pre_etrans, double pre_erot, double pre_evib,double pre_eelec,
                      double &post_etotal, int &kspecies)
 {
   double pre_etotal,ecc,e_excess;
   double prob,evib,inverse_kT;
+  double eelec;
   int iv,ilevel,maxlev,limlev;
   int mspec,aspec;
   OneReaction *r;

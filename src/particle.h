@@ -17,7 +17,9 @@
 
 #include "stdio.h"
 #include "pointers.h"
-
+#include <tuple>
+#include <vector>
+#include "rovib_utils.h"
 namespace SPARTA_NS {
 
 class Particle : protected Pointers {
@@ -26,6 +28,7 @@ class Particle : protected Pointers {
   int sorted;               // 1 if particles are sorted by grid cell
 
   enum{MAXVIBMODE=4};       // increase value if species need more vib modes
+  enum{MAXELECMODE=1};       // increase value if species need more electronic modes (rydberg states?)
 
   struct Species {          // info on each particle species, read from file
     char id[16];            // species ID
@@ -38,10 +41,14 @@ class Particle : protected Pointers {
     double vibtemp[MAXVIBMODE];   // vibrational temperature(s)
     double vibrel[MAXVIBMODE];    // inverse vibrational relaxation number(s)
     int vibdegen[MAXVIBMODE];     // vibrational mode degeneracies
-    int rotdof,vibdof;      // rotational/vibrational DOF
-    int nrottemp,nvibmode;  // # of rotational/vibrational temps/modes defined
-    int internaldof;        // 1 if either rotdof or vibdof != 0
+    double electemp[MAXELECMODE];   // vibrational temperature(s)
+    double elecrel[MAXELECMODE];    // inverse vibrational relaxation number(s)
+    int elecdegen[MAXELECMODE];     // vibrational mode degeneracies
+    int rotdof,vibdof,elecdof;      // rotational/vibrational/electronic DOF
+    int nrottemp,nvibmode,nelecmode;  // # of rotational/vibrational/electronic temps/modes defined
+    int internaldof;        // 1 if either rotdof or vibdof or elecdof != 0
     int vibdiscrete_read;   // 1 if species.vib file read for this species
+    int elecdiscrete_read;   // 1 if species.elec file read for this species
     double magmoment;       // magnetic moment, set by species_modify command
   };
 
@@ -59,9 +66,18 @@ class Particle : protected Pointers {
     int nmode;
   };
 
+  struct ElecFile {          // extra electronic info read from elecfile
+    char id[16];
+    double elecrel[MAXELECMODE];
+    double electemp[MAXELECMODE];
+    int elecdegen[MAXELECMODE];
+    int nmode;
+  };
+
   Species *species;         // list of particle species info
   int nspecies;             // # of defined species
   int maxvibmode;           // max vibmode of any species (mode = dof/2)
+  int maxelecmode;           // max elecmode of any species (mode = dof/2)
 
   class Mixture **mixture;
   int nmixture;
@@ -75,6 +91,9 @@ class Particle : protected Pointers {
     double v[3];            // particle velocity
     double erot;            // rotational energy
     double evib;            // vibrational energy
+    double eelec;            // electronic energy
+    double xj;            // rotational QN
+    double xv;            // vibrational QN
     int flag;               // used for migration status
     double dtremain;        // portion of move timestep remaining
     double weight;          // particle or cell weight, if weighting enabled
@@ -90,6 +109,9 @@ class Particle : protected Pointers {
     double v[3];            // particle velocity
     double erot;            // rotational energy
     double evib;            // vibrational energy
+    double eelec;            // electronic energy
+    double xj;            // electronic energy
+    double xv;            // electronic energy
   };
 
   bigint nglobal;           // global # of particles
@@ -150,6 +172,8 @@ class Particle : protected Pointers {
   virtual void post_weight();
 
   virtual int add_particle(int, int, int, double *, double *, double, double);
+  virtual int add_particle(int, int, int, double *, double *, double, double, double);
+  virtual int add_particle(int, int, int, double *, double *, double, double, double, double, double);
   virtual int add_particle();
   int clone_particle(int);
   void add_species(int, char **);
@@ -159,6 +183,10 @@ class Particle : protected Pointers {
   int find_mixture(char *);
   double erot(int, double, class RanKnuth *);
   double evib(int, double, class RanKnuth *);
+  double eelec(int,int&, double, class RanKnuth *);
+  // ECG ADDS
+  std::tuple<double, double, double, double> evibrot(std::vector<jvData> jvdata, std::vector<double> cprobs,int isp, int eState, double Tv, double Tr, RanKnuth *erandom);
+
 
   void write_restart_species(FILE *fp);
   void read_restart_species(FILE *fp);
@@ -200,6 +228,7 @@ class Particle : protected Pointers {
   Species *filespecies;     // list of species read from file
   RotFile *filerot;         // list of species rotation info read from file
   VibFile *filevib;         // list of species vibration info read from file
+  ElecFile *fileelec;         // list of species electronic info read from file
 
   class RanKnuth *wrandom;   // RNG for particle weighting
 
@@ -224,6 +253,7 @@ class Particle : protected Pointers {
   void read_species_file();
   void read_rotation_file();
   void read_vibration_file();
+  void read_electronic_file();
   int wordcount(char *, char **);
 };
 

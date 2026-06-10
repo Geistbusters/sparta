@@ -32,7 +32,7 @@ collide		    vss air air.vss
 collide_modify      rotate smooth vibrate discrete
 
 react               tce air.tce
-react_modify        recomb no compute_chem_rates yes partial_energy no
+react_modify        recomb yes compute_chem_rates no partial_energy no
 
 create_particles    air n 10000 twopass
 

@@ -45,7 +45,7 @@ void ReactTCE::init()
 /* ---------------------------------------------------------------------- */
 
 int ReactTCE::attempt(Particle::OnePart *ip, Particle::OnePart *jp,
-                      double pre_etrans, double pre_erot, double pre_evib,
+                      double pre_etrans, double pre_erot, double pre_evib, double pre_eelec,
                       double &post_etotal, int &kspecies)
 {
   double pre_etotal,ecc,e_excess,z;

@@ -40,7 +40,7 @@ enum{PERIODIC,OUTFLOW,REFLECT,SURFACE,AXISYM};  // same as Domain
 enum{UNKNOWN,OUTSIDE,INSIDE,OVERLAP};           // same as Grid
 enum{PKEEP,PINSERT,PDONE,PDISCARD,PENTRY,PEXIT,PSURF};   // several files
 enum{NCHILD,NPARENT,NUNKNOWN,NPBCHILD,NPBPARENT,NPBUNKNOWN,NBOUND};  // Grid
-enum{NRHO,TEMP_THERMAL,TEMP_ROT,TEMP_VIB,VX,VY,VZ,PRESS,SPECIES};
+enum{NRHO,TEMP_THERMAL,TEMP_ROT,TEMP_VIB,TEMP_ELEC,VX,VY,VZ,PRESS,SPECIES};
 enum{NOSUBSONIC,PTBOTH,PONLY};
 
 #define DELTATASK 256
@@ -168,6 +168,7 @@ void FixEmitFaceFile::init()
   temp_thermal_mix = particle->mixture[imix]->temp_thermal;
   temp_rot_mix = particle->mixture[imix]->temp_rot;
   temp_vib_mix = particle->mixture[imix]->temp_vib;
+  temp_elec_mix = particle->mixture[imix]->temp_elec;
   vstream_mix = particle->mixture[imix]->vstream;
   vscale_mix = particle->mixture[imix]->vscale;
   fraction_mix = particle->mixture[imix]->fraction;
@@ -346,9 +347,9 @@ void FixEmitFaceFile::create_task(int icell)
 void FixEmitFaceFile::perform_task()
 {
   int pcell,ninsert,nactual,isp,ispecies,id;
-  double temp_thermal,temp_rot,temp_vib;
+  double temp_thermal,temp_rot,temp_vib, temp_elec;
   double indot,scosine,rn,ntarget,vr;
-  double beta_un,normalized_distbn_fn,theta,erot,evib;
+  double beta_un,normalized_distbn_fn,theta,erot,evib, eelec;
   double x[3],v[3];
   double *lo,*hi,*vstream,*cummulative,*vscale;
   Particle::OnePart *p;
@@ -387,6 +388,7 @@ void FixEmitFaceFile::perform_task()
     temp_thermal = tasks[i].temp_thermal;
     temp_rot = tasks[i].temp_rot;
     temp_vib = tasks[i].temp_vib;
+    temp_elec = tasks[i].temp_elec;
     vscale = tasks[i].vscale;
     vstream = tasks[i].vstream;
 
@@ -425,9 +427,11 @@ void FixEmitFaceFile::perform_task()
           v[qdim] = vr * cos(theta) + vstream[qdim];
           erot = particle->erot(ispecies,temp_rot,random);
           evib = particle->evib(ispecies,temp_vib,random);
+          int eState;
+		  eelec = particle->eelec(ispecies,eState,temp_elec,random);
           id = MAXSMALLINT*random->uniform();
 
-          particle->add_particle(id,ispecies,pcell,x,v,erot,evib);
+          particle->add_particle(id,ispecies,pcell,x,v,erot,evib,eelec);
           nactual++;
 
           p = &particle->particles[particle->nlocal-1];
@@ -436,7 +440,7 @@ void FixEmitFaceFile::perform_task()
 
           if (nfix_update_custom)
             modify->update_custom(particle->nlocal-1,temp_thermal,
-                                 temp_rot,temp_vib,vstream);
+                                 temp_rot,temp_vib,temp_elec,vstream);
         }
 
         nsingle += nactual;
@@ -479,9 +483,11 @@ void FixEmitFaceFile::perform_task()
         v[qdim] = vr * cos(theta) + vstream[qdim];
         erot = particle->erot(ispecies,temp_rot,random);
         evib = particle->evib(ispecies,temp_vib,random);
+        int eState;
+	eelec = particle->eelec(ispecies,eState,temp_elec,random);
         id = MAXSMALLINT*random->uniform();
 
-        particle->add_particle(id,ispecies,pcell,x,v,erot,evib);
+        particle->add_particle(id,ispecies,pcell,x,v,erot,evib,eelec);
         nactual++;
 
         p = &particle->particles[particle->nlocal-1];
@@ -490,7 +496,7 @@ void FixEmitFaceFile::perform_task()
 
         if (nfix_update_custom)
           modify->update_custom(particle->nlocal-1,temp_thermal,
-                               temp_rot,temp_vib,vstream);
+                               temp_rot,temp_vib,temp_elec,vstream);
       }
 
       nsingle += nactual;
@@ -598,6 +604,7 @@ void FixEmitFaceFile::read_file(char *file, char *section)
     else if (strcmp(word,"temp") == 0) mesh.which[i] = TEMP_THERMAL;
     else if (strcmp(word,"trot") == 0) mesh.which[i] = TEMP_ROT;
     else if (strcmp(word,"tvib") == 0) mesh.which[i] = TEMP_VIB;
+    else if (strcmp(word,"telec") == 0) mesh.which[i] = TEMP_ELEC;
     else if (strcmp(word,"vx") == 0) mesh.which[i] = VX;
     else if (strcmp(word,"vy") == 0) mesh.which[i] = VY;
     else if (strcmp(word,"vz") == 0) mesh.which[i] = VZ;
@@ -701,7 +708,7 @@ void FixEmitFaceFile::bcast_mesh()
 
   // subsonic if PRESS is set in mesh file
   // PTBOTH if TEMP is also set, else PONLY
-  // error if TEMP_ROT, TEMP_VIB, or VSTREAM is set
+  // error if TEMP_ROT, TEMP_VIB, TEMP_ELEC, or VSTREAM is set
 
   subsonic = 0;
   subsonic_style = NOSUBSONIC;
@@ -715,10 +722,10 @@ void FixEmitFaceFile::bcast_mesh()
     for (int i = 0; i < mesh.nvalues; i++) {
       if (mesh.which[i] == TEMP_THERMAL) subsonic_style = PTBOTH;
       if (mesh.which[i] == NRHO ||
-          mesh.which[i] == TEMP_ROT || mesh.which[i] == TEMP_VIB ||
+          mesh.which[i] == TEMP_ROT || mesh.which[i] == TEMP_VIB || mesh.which[i] == TEMP_ELEC || 
           mesh.which[i] == VX || mesh.which[i] == VY || mesh.which[i] == VZ)
         error->all(FLERR,"Fix emit/face/file cannot set "
-                   "nrho/trot/tvib/vx/vy/vz when subsonic");
+                   "nrho/trot/tvib/telec/vx/vy/vz when subsonic");
     }
   }
 }
@@ -795,6 +802,7 @@ int FixEmitFaceFile::interpolate(int icell)
   tasks[ntask].temp_thermal = temp_thermal_mix;
   tasks[ntask].temp_rot = temp_rot_mix;
   tasks[ntask].temp_vib = temp_vib_mix;
+  tasks[ntask].temp_elec = temp_elec_mix;
   tasks[ntask].press = 0.0;
   tasks[ntask].vstream[0] = vstream_mix[0];
   tasks[ntask].vstream[1] = vstream_mix[1];
@@ -849,6 +857,8 @@ int FixEmitFaceFile::interpolate(int icell)
         tasks[ntask].temp_rot = linear_interpolation(xc[0],m,plo,phi);
       else if (mesh.which[m] == TEMP_VIB)
         tasks[ntask].temp_vib = linear_interpolation(xc[0],m,plo,phi);
+      else if (mesh.which[m] == TEMP_ELEC)
+        tasks[ntask].temp_elec = linear_interpolation(xc[0],m,plo,phi);
       else if (mesh.which[m] == VX)
         tasks[ntask].vstream[0] = linear_interpolation(xc[0],m,plo,phi);
       else if (mesh.which[m] == VY)
@@ -882,6 +892,9 @@ int FixEmitFaceFile::interpolate(int icell)
           bilinear_interpolation(xc[0],xc[1],m,plo,phi,qlo,qhi);
       else if (mesh.which[m] == TEMP_VIB)
         tasks[ntask].temp_vib =
+          bilinear_interpolation(xc[0],xc[1],m,plo,phi,qlo,qhi);
+      else if (mesh.which[m] == TEMP_ELEC)
+        tasks[ntask].temp_elec =
           bilinear_interpolation(xc[0],xc[1],m,plo,phi,qlo,qhi);
       else if (mesh.which[m] == VX)
         tasks[ntask].vstream[0] =
@@ -1240,7 +1253,7 @@ void FixEmitFaceFile::subsonic_grid()
     }
 
     tasks[i].temp_thermal = temp_thermal_cell;
-    tasks[i].temp_rot = tasks[i].temp_vib = temp_thermal_cell;
+    tasks[i].temp_elec = tasks[i].temp_rot = tasks[i].temp_vib = temp_thermal_cell;
   }
 
   // test if any task has invalid thermal temperature for first time

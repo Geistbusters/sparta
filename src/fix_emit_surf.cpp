@@ -579,11 +579,13 @@ void FixEmitSurf::create_task(int icell)
       tasks[ntask].temp_thermal = temp_thermal_custom;
       tasks[ntask].temp_rot = temp_thermal_custom;
       tasks[ntask].temp_vib = temp_thermal_custom;
+      tasks[ntask].temp_elec = temp_thermal_custom;
       utemp = temp_thermal_custom;
     } else {
       tasks[ntask].temp_thermal = temp_thermal;
       tasks[ntask].temp_rot = particle->mixture[imix]->temp_rot;
       tasks[ntask].temp_vib = particle->mixture[imix]->temp_vib;
+      tasks[ntask].temp_elec = particle->mixture[imix]->temp_elec;
       utemp = temp_thermal;
     }
     tasks[ntask].magvstream = magvstream;
@@ -605,7 +607,7 @@ void FixEmitSurf::perform_task()
 {
   int i,m,n,pcell,isurf,ninsert,nactual,isp,ispecies,ntri,id;
   double indot,scosine,rn,ntarget,vr,alpha,beta;
-  double beta_un,normalized_distbn_fn,theta,erot,evib;
+  double beta_un,normalized_distbn_fn,theta,erot,evib, eelec;
   double vnmag,vamag,vbmag;
   double *normal,*p1,*p2,*p3,*atan,*btan,*vstream,*vscale;
   double x[3],v[3],e1[3],e2[3];
@@ -664,6 +666,7 @@ void FixEmitSurf::perform_task()
     temp_thermal = tasks[i].temp_thermal;
     temp_rot = tasks[i].temp_rot;
     temp_vib = tasks[i].temp_vib;
+    temp_elec = tasks[i].temp_elec;
     magvstream = tasks[i].magvstream;
     vstream = tasks[i].vstream;
 
@@ -743,9 +746,11 @@ void FixEmitSurf::perform_task()
 
           erot = particle->erot(ispecies,temp_rot,random);
           evib = particle->evib(ispecies,temp_vib,random);
+	  int eState;
+          eelec = particle->eelec(ispecies,eState,temp_elec,random);
           id = MAXSMALLINT*random->uniform();
 
-          particle->add_particle(id,ispecies,pcell,x,v,erot,evib);
+          particle->add_particle(id,ispecies,pcell,x,v,erot,evib,eelec);
           nactual++;
 
           p = &particle->particles[particle->nlocal-1];
@@ -758,7 +763,7 @@ void FixEmitSurf::perform_task()
 
           if (nfix_update_custom)
             modify->update_custom(particle->nlocal-1,temp_thermal,
-                                 temp_rot,temp_vib,vstream);
+                                 temp_rot,temp_vib,temp_elec,vstream);
         }
 
         nsingle += nactual;
@@ -852,9 +857,11 @@ void FixEmitSurf::perform_task()
 
         erot = particle->erot(ispecies,temp_rot,random);
         evib = particle->evib(ispecies,temp_vib,random);
+        int eState;
+	eelec = particle->eelec(ispecies,eState, temp_elec,random);
         id = MAXSMALLINT*random->uniform();
 
-        particle->add_particle(id,ispecies,pcell,x,v,erot,evib);
+        particle->add_particle(id,ispecies,pcell,x,v,erot,evib,eelec);
         nactual++;
 
         p = &particle->particles[particle->nlocal-1];
@@ -867,7 +874,7 @@ void FixEmitSurf::perform_task()
 
         if (nfix_update_custom)
           modify->update_custom(particle->nlocal-1,temp_thermal,
-                               temp_rot,temp_vib,vstream);
+                               temp_rot,temp_vib,temp_elec,vstream);
       }
 
       nsingle += nactual;
@@ -1120,7 +1127,8 @@ void FixEmitSurf::subsonic_grid()
     }
 
     tasks[i].temp_thermal = temp_thermal_cell;
-    tasks[i].temp_rot = tasks[i].temp_vib = temp_thermal_cell;
+    //tasks[i].temp_rot = tasks[i].temp_vib = temp_thermal_cell;
+    tasks[i].temp_elec = tasks[i].temp_rot = tasks[i].temp_vib = temp_thermal_cell;
   }
 
   // test if any task has invalid thermal temperature for first time

@@ -27,6 +27,8 @@
 #include "error.h"
 #include "string.h"
 
+#include "rovib_utils.h"
+
 using namespace SPARTA_NS;
 
 enum{NONE,COMPUTE,FIX};

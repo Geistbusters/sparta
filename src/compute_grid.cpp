@@ -28,13 +28,13 @@ using namespace SPARTA_NS;
 // user keywords
 
 enum{NUM,NRHO,NFRAC,MASS,MASSRHO,MASSFRAC,
-     U,V,W,USQ,VSQ,WSQ,KE,TEMPERATURE,EROT,TROT,EVIB,TVIB,
+     U,V,W,USQ,VSQ,WSQ,KE,TEMPERATURE,EROT,TROT,EVIB,TVIB,EELEC,TELEC,
      PXRHO,PYRHO,PZRHO,KERHO};
 
 // internal accumulators
 
 enum{COUNT,MASSSUM,MVX,MVY,MVZ,MVXSQ,MVYSQ,MVZSQ,MVSQ,
-     ENGROT,ENGVIB,DOFROT,DOFVIB,CELLCOUNT,CELLMASS,LASTSIZE};
+     ENGROT,ENGVIB,ENGELEC,DOFROT,DOFVIB,DOFELEC,CELLCOUNT,CELLMASS,LASTSIZE};
 
 // max # of quantities to accumulate for any user value
 
@@ -141,6 +141,14 @@ ComputeGrid::ComputeGrid(SPARTA *sparta, int narg, char **arg) :
       set_map(ivalue,ENGVIB);
       set_map(ivalue,DOFVIB);
       tvib_flag = 1;
+    } else if (strcmp(arg[iarg],"eelec") == 0) { //////Electronic energy stuff
+      value[ivalue] = EELEC;
+      set_map(ivalue,ENGELEC);
+      set_map(ivalue,COUNT);
+    } else if (strcmp(arg[iarg],"telec") == 0) {
+      value[ivalue] = TELEC;
+      set_map(ivalue,ENGELEC);
+      set_map(ivalue,DOFELEC);
     } else if (strcmp(arg[iarg],"pxrho") == 0) {
       value[ivalue] = PXRHO;
       set_map(ivalue,MVX);
@@ -291,11 +299,17 @@ void ComputeGrid::compute_per_grid()
       case ENGVIB:
         vec[k++] += particles[i].evib;
         break;
+      case ENGELEC:
+        vec[k++] += particles[i].eelec;
+        break;
       case DOFROT:
         vec[k++] += species[ispecies].rotdof;
         break;
       case DOFVIB:
         vec[k++] += species[ispecies].vibdof;
+        break;
+      case DOFELEC:
+        vec[k++] += species[ispecies].elecdof;
         break;
       }
     }
@@ -485,6 +499,7 @@ void ComputeGrid::post_process_grid(int index, int nsample,
 
   case EROT:
   case EVIB:
+  case EELEC:
     {
       double norm;
       int eng = emap[0];
@@ -500,6 +515,7 @@ void ComputeGrid::post_process_grid(int index, int nsample,
 
   case TROT:
   case TVIB:
+  case TELEC:
     {
       double norm;
       int eng = emap[0];

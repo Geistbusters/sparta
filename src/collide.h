@@ -26,8 +26,9 @@ namespace SPARTA_NS {
 class Collide : protected Pointers {
  public:
   char *style;
-  int rotstyle;       // none/smooth rotational modes
-  int vibstyle;       // none/discrete/smooth vibrational modes
+  int rotstyle;       // none/smooth rotational/md modes
+  int vibstyle;       // none/discrete/smooth/md vibrational modes
+  int elecstyle;       // none/discrete/smooth/md electornic modes
   int nearcp;         // 1 for near neighbor collisions
   int nearlimit;      // limit on neighbor serach for near neigh collisions
 
@@ -49,6 +50,9 @@ class Collide : protected Pointers {
   virtual void setup_collision(Particle::OnePart *, Particle::OnePart *) = 0;
   virtual int perform_collision(Particle::OnePart *&, Particle::OnePart *&,
                                 Particle::OnePart *&) = 0;
+
+//virtual int perform_collision_md(Particle::OnePart *&, Particle::OnePart *&,
+//                               Particle::OnePart *&) = 0;
 
   virtual double extract(int, int, const char *) {return 0.0;}
 

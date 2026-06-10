@@ -1511,7 +1511,7 @@ void ReadRestart::assign_particles(int skipflag)
     icell = (*hash)[p->icell];
     if (p->nsplit <= 0)
       icell = sinfo[cells[icell].isplit].csubs[-p->nsplit];
-    particle->add_particle(p->id,p->ispecies,icell,p->x,p->v,p->erot,p->evib);
+    particle->add_particle(p->id,p->ispecies,icell,p->x,p->v,p->erot,p->evib,p->eelec,p->xj,p->xv);
     ptr += nbytes_particle;
     if (ncustom) {
       particle->unpack_custom(ptr,particle->nlocal-1);

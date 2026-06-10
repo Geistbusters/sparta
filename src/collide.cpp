@@ -31,7 +31,7 @@
 
 using namespace SPARTA_NS;
 
-enum{NONE,DISCRETE,SMOOTH};       // several files  (NOTE: change order)
+enum{NONE,DISCRETE,SMOOTH,MD};       // several files  (NOTE: change order)
 enum{PKEEP,PINSERT,PDONE,PDISCARD,PENTRY,PEXIT,PSURF};   // several files
 
 #define DELTAGRID 1000            // must be bigger than split cells per cell
@@ -81,6 +81,7 @@ Collide::Collide(SPARTA *sparta, int, char **arg) : Pointers(sparta)
   remain = NULL;
   rotstyle = SMOOTH;
   vibstyle = NONE;
+  elecstyle = NONE;
   nearcp = 0;
   nearlimit = 10;
 
@@ -161,7 +162,7 @@ void Collide::init()
     error->all(FLERR,"Must use Kokkos-supported collision style if "
                "Kokkos is enabled");
 
-  // if rotstyle or vibstyle = DISCRETE,
+  // if rotstyle or vibstyle or elecstyle = DISCRETE,
   // check that extra rotation/vibration info is defined
   // for species that require it
 
@@ -204,6 +205,26 @@ void Collide::init()
       error->all(FLERR,str);
     }
   }
+
+  if (elecstyle == DISCRETE) {
+    Particle::Species *species = particle->species;
+    int nspecies = particle->nspecies;
+
+    int flag = 0;
+    for (int isp = 0; isp < nspecies; isp++) {
+	if (species[isp].elecdof == 0) continue;
+	if (species[isp].elecdof == 1) continue;
+      if (species[isp].elecdof == 0 && species[isp].nelecmode != 0) flag++;
+      if (species[isp].elecdof == 1 && species[isp].nelecmode != 1) flag++;
+    }
+    if (flag) {
+      char str[128];
+      sprintf(str,"%d species do not define correct electronical "
+              "terms for discrete model",flag);
+      error->all(FLERR,str);
+    }
+  }
+
 
   // reallocate one-cell data structs for one or many groups
 
@@ -355,6 +376,7 @@ void Collide::modify_params(int narg, char **arg)
       // not yet supported
       //else if (strcmp(arg[iarg+1],"discrete") == 0) rotstyle = DISCRETE;
       else if (strcmp(arg[iarg+1],"smooth") == 0) rotstyle = SMOOTH;
+      else if (strcmp(arg[iarg+1],"md") == 0) rotstyle = MD;
       else error->all(FLERR,"Illegal collide_modify command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"vibrate") == 0) {
@@ -362,6 +384,15 @@ void Collide::modify_params(int narg, char **arg)
       if (strcmp(arg[iarg+1],"no") == 0) vibstyle = NONE;
       else if (strcmp(arg[iarg+1],"discrete") == 0) vibstyle = DISCRETE;
       else if (strcmp(arg[iarg+1],"smooth") == 0) vibstyle = SMOOTH;
+      else if (strcmp(arg[iarg+1],"md") == 0) vibstyle = MD;
+      else error->all(FLERR,"Illegal collide_modify command");
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"electric") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal collide_modify command");
+      if (strcmp(arg[iarg+1],"no") == 0) elecstyle = NONE;
+      else if (strcmp(arg[iarg+1],"discrete") == 0) elecstyle = DISCRETE;
+      else if (strcmp(arg[iarg+1],"smooth") == 0) elecstyle = SMOOTH;
+      else if (strcmp(arg[iarg+1],"md") == 0) elecstyle = MD;
       else error->all(FLERR,"Illegal collide_modify command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"ambipolar") == 0) {

@@ -192,6 +192,7 @@ class SurfReactAdsorb : public SurfReact {
     double v[3];            // particle velocity
     double erot;            // rotational energy
     double evib;            // vibrational energy
+    double eelec;            // vibrational energy
     double dtremain;        // fraction of timestep
   };
 

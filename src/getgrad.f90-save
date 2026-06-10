@@ -1,0 +1,1505 @@
+!      subroutine getgrad(dmag)
+!      subroutine getgrad(dmag,vdotd)
+       subroutine getgrad(dmag,im,time_in)
+
+! Calls GETPEM once, and then computes several important variables:
+! iflinear:      0: an atom; 1: Linear; 2; non-linear
+!  INPUT:
+! xxm,ppm,mmm,symbolm,nsurf,nsurft,iflinear,bigj
+!  OUTPUT:
+! pe,pem,pema,pemd,gpema,gpemd,gpem,gv,cre,cim,gcre,gcim,phop,phase
+! gv(3,mnat)     : Nuclear gradient.
+! cre(2*mnsurf)  : Real part of the electronic coefficients
+! cim(2*mnsurf)  : Imaginary part of the electronic coefficients
+! gcre(2*mnsurf) : Time derivative of real part of electronic coefficients
+! gcim(2*mnsurf) : Time derivative of imaginary part of electronic coefficients
+! PHOP = Hopping probability (for surface hoppping) or switching
+!   probability (for SCDM and CSDM) divided by the stepsize.
+
+!  RVM
+! For Mike Hack's method of integration we define the bjk here
+! bjk = -2*Re(ajk* R.djk) (adiabatic)
+! bjk =  2 * hbar-1 *Im(ajk* pemd(j,k)) (diabatic)
+!  RVM
+! pe             : Potential energy
+! dmag = Magnitude of the nonadiabatic coupling vector (for CSDM)
+! dmag = Magnitude of kappaTDC (for kappaCSDM)
+! GCRE and GCIM = Time derivatives of the real and imaginary parts
+!   of the electronic variables, including the DM terms for the
+!   SCDM and CSDM methods.
+! pem            : Array of adiabatic or diabatic potential energies.
+! gpem = Gradients of the adiabatic or diabatic potential energies.
+
+      use param, only: mnat, mnsurf, mndecay, autofs
+      use c_struct, only: xxm, indmm, symbolm, cell, natoms, mmm, iflinear, &
+                          icharge, imulti
+      use c_sys, only: nsurft, methflag, e0param, cparam, intflag, &
+                       repflag, nsurft, hstep, couplingdecay, &
+                       decay_pairs, decay_threshold
+      use c_traj, only: ppm, bfunc, gcim, gcre, phop, phase, gv, &
+                        cim, cre, phop, pe, nsurf, dvec, pem, &
+                        gpem, tinyrho, gpema, gpemd, pema, pemd, &
+                        ppm_old, gpema_old, step, step_old, istep, &
+                        istep_old, time_prev, edcflag, ktdc_old
+
+      implicit none
+      integer :: i,j,k,l,m,ii,i2,j2,kk
+      integer :: hh,hi
+      integer :: im,jcharge,jmulti
+      double precision :: time_in
+      double precision :: rhor(mnsurf,mnsurf),rhoi(mnsurf,mnsurf),vdotd(mnsurf,mnsurf)
+
+      double precision :: ppvib(3,mnat),svec(3,mnat,mnsurf), &
+                          es,taui(mnsurf),ps(mnsurf),tmp,dum,dvecmag,pdotd, &
+                          u2b2(2,2),gu2b2(3,mnat,2,2),dvec2b2(3,mnat),gcred(mnsurf), &
+                          gcimd(mnsurf),vd(mnsurf),pdeco(3,mnat),smagms, &
+                          rhorc(mnsurf,mnsurf),rhoic(mnsurf,mnsurf),tmpr,  &
+                          tmpi,dsum2,dmag,sntmp,cstmp,rhotmp, &
+                          rhorc2(mnsurf,mnsurf),rhoic2(mnsurf,mnsurf)
+! Check if it is TFS-EDC or FSTU-EDC
+      integer :: is_edc
+      double precision :: Ekin
+! Curvature-driven approximation
+      double precision :: ktdc(mnsurf,mnsurf),gdotv(mnsurf), &
+                          gdotv_old(mnsurf),eh(mnsurf),fmag, &
+                          gdiff(3,mnat,mnsurf,mnsurf),normv, &
+                          vdotgdiff(mnsurf,mnsurf), &
+                          fac1(mnsurf,mnsurf),fac2(mnsurf,mnsurf), &
+                          nacgv(3,mnat,mnsurf,mnsurf), &
+                          vdotnacgv(mnsurf,mnsurf), testgv(3,mnat), normg, &
+                          distance(mnat,mnat), vdotnac(mnsurf,mnsurf)
+      double precision :: projector(3*mnat,3*mnat), nacvector(3*mnat), &
+                          projected_nacgv_vector(3*mnat), &
+                          projected_nacgv(3,mnat,mnsurf,mnsurf)
+      double precision :: velocity_vector(3*mnat), &
+                          projected_velocity_vector(3*mnat),&
+                          vibrational_velocity(3,mnat), vdotvvib
+      double precision :: sumgrad_vector(3*mnat), &
+                          projected_sumgrad_vector(3*mnat),&
+                          sumgrad(3,mnat,mnsurf,mnsurf),&
+                          projected_sumgrad(3,mnat,mnsurf,mnsurf),&
+                          vdotsumgrad(mnsurf,mnsurf)
+
+      double precision :: u2b3(3,3),gu2b3(3,mnat,3,3),dvec2b3(3,mnat,3,3), &
+                          adiab3(3),mat(3,3)
+
+      double precision :: ktdc_threshold
+
+      double precision :: comxxm(3),comppm(3),mtot,totcomp
+      double precision :: bigjm(3),bigjtm
+      integer :: is_laststep
+
+      common /c_taui/ taui
+
+! Check if it is TFS-EDC or FSTU-EDC
+      is_edc=0
+      if (METHFLAG.EQ.1.OR.METHFLAG.EQ.5) then 
+        if (edcflag.eq.1) then
+          is_edc=1
+        endif
+      endif
+
+! GET ENERGIES,pema,pemd,gpema,gpemd,dvec
+      if(im.gt.0) then
+        jcharge=icharge(im)
+        jmulti =imulti(im)
+      else
+        jcharge=999
+        jmulti =999
+      endif
+      call getpem(xxm,indmm,symbolm,cell,natoms,pema,pemd,gpema,  &
+                  gpemd,dvec,mmm,0,nsurf,jcharge,jmulti)
+      !=====remove coupling for dissociation limits
+      distance=0.d0
+      do i=1,natoms
+      do j=1,natoms
+      do k=1,3
+        distance(i,j)=distance(i,j)+(xxm(k,i)-xxm(k,j))**2
+      enddo
+      distance(i,j)=sqrt(distance(i,j))
+      enddo
+      enddo
+      do k=1, couplingdecay 
+        if (distance(decay_pairs(k,1),decay_pairs(k,2)).gt.decay_threshold(k)) then
+          dvec(:,:,:,:)=0.d0
+          do l=1,nsurft
+            do m=k+1,nsurft
+              pemd(l,m)=0.d0
+              pemd(m,l)=0.d0
+            enddo
+          enddo
+        endif
+      enddo
+
+
+! for multiple surface trajectories (nsurft > 1)
+      if (nsurft.gt.1) then
+
+! ZERO
+      do i=1,nsurft
+        phop(i) = 0.d0
+      enddo
+! POTENTIAL ENERGIES AND GRADIENTS
+      IF (METHFLAG.EQ.0.OR.METHFLAG.EQ.1.OR.METHFLAG.EQ.5) THEN
+!     single surface propagation or surface hopping calculation
+
+      if (repflag.eq.0) then
+!       adiabatic
+        pe = pema(nsurf)
+        do i=1,3
+        do j=1,natoms
+          gv(i,j)=gpema(i,j,nsurf)
+        enddo
+        enddo
+      else if (repflag.eq.1) then
+!       diabatic
+        pe = pemd(nsurf,nsurf)
+        do i=1,3
+        do j=1,natoms
+          gv(i,j)=gpemd(i,j,nsurf,nsurf)
+        enddo
+        enddo
+      else
+        write(6,*)'REPFLAG = ',repflag,' in GETGRAD'
+        stop
+      endif
+
+      ELSE IF (METHFLAG.EQ.2.OR.METHFLAG.EQ.3.OR.METHFLAG.EQ.4) THEN
+!     Semiclassical Ehrenfest and DM methods
+
+!     convert electronic variables to density matrix
+      call getrho(cre,cim,rhor,rhoi,nsurft)
+
+      if (repflag.eq.1) then
+!       diabatic representation
+        pe = 0.d0
+        do k=1,nsurft
+        do l=1,nsurft
+! integrate phase angle separately
+        tmp = phase(l)-phase(k)
+        sntmp = sin(tmp)
+        cstmp = cos(tmp)
+        rhotmp = (rhor(k,l)*cstmp+rhoi(k,l)*sntmp)
+!       write(6,*) 'rhor(k,l) cstmp rhoi(k,l) sntmp'
+!       write(6,*) rhor(k,l),cstmp,rhoi(k,l),sntmp,pemd(k,l)*autoev
+!       imaginary terms cancel exactly
+        pe=pe+rhotmp*pemd(k,l)
+! end
+! integrate whole coefficient
+!        pe = pe + rhor(k,l)*pemd(k,l)
+! end
+        enddo
+        enddo
+
+        do 15 i=1,3
+        do 15 j=1,natoms
+        gv(i,j) = 0.d0
+        do 15 k=1,nsurft
+        do 15 l=1,nsurft
+! integrate phase angle separately
+        tmp = phase(l)-phase(k)
+        sntmp = sin(tmp)
+        cstmp = cos(tmp)
+        rhotmp = (rhor(k,l)*cstmp+rhoi(k,l)*sntmp)
+        gv(i,j)=gv(i,j)+rhotmp*gpemd(i,j,k,l)
+! end
+! integrate whole coefficient
+!        gv(i,j) = gv(i,j) + rhor(k,l)*gpemd(i,j,k,l)
+! end
+  15    continue
+
+      else if (repflag.eq.0) then
+
+!       adiabatic representation
+        pe = 0.d0
+        do k=1,nsurft
+        pe = pe + rhor(k,k)*pema(k)
+        enddo
+        do 20 i=1,3
+        do 20 j=1,natoms
+        gv(i,j) = 0.d0
+        do 20 k=1,nsurft
+        gv(i,j) = gv(i,j) + rhor(k,k)*gpema(i,j,k)
+        do 20 l=1,nsurft
+! integrate whole coefficient
+!        gv(i,j) = gv(i,j) - 2.d0*rhor(k,l)*dvec(i,j,k,l)*pema(k)
+! end
+! integrate phase angle separately
+        tmp = phase(k)-phase(l)
+        sntmp = sin(tmp)
+        cstmp = cos(tmp)
+        rhotmp = (rhor(k,l)*cstmp-rhoi(k,l)*sntmp)
+        gv(i,j) = gv(i,j) - 2.d0*rhotmp*dvec(i,j,k,l)*pema(k)
+! end
+  20    continue
+
+      else
+        write(6,*)'REPFLAG = ',repflag,' in GETGRAD'
+        stop
+      endif
+
+      ELSE IF (METHFLAG.EQ.6.OR.METHFLAG.EQ.7.OR.METHFLAG.EQ.8.OR.METHFLAG.EQ.9) THEN
+!     Curvature-Driven semiclassical Ehrenfest and DM methods
+
+!     convert electronic variables to density matrix
+      call getrho(cre,cim,rhor,rhoi,nsurft)
+
+      !===compute kappa TDC
+      !compute velocity-dot-gradient
+      ktdc(:,:)=0.d0
+      if (istep>=2) then 
+      do k=1,nsurft
+        gdotv(k) = 0.d0
+        gdotv_old(k) = 0.d0
+      do i=1,3
+      do j=1,natoms
+        gdotv(k) = gdotv(k) + gpema(i,j,k)*ppm(i,j)/mmm(j)
+        gdotv_old(k) = gdotv_old(k) + gpema_old(i,j,k)*ppm_old(i,j)/mmm(j)
+      enddo
+      enddo
+      enddo
+
+      ktdc_threshold=5.0
+      do k=1,nsurft
+        if ((time_in-time_prev)>ktdc_threshold) then
+          eh(k)=(gdotv(k)-gdotv_old(k))/(time_in - time_prev)
+        else 
+          eh(k)=(gdotv(k)-gdotv_old(k))/ktdc_threshold
+        endif
+        !write(6,'(A1,X,I3,X,6F30.20)') "A",k,eh(k), (gdotv(k)-gdotv_old(k))/(time_in - time_prev), gdotv(k), gdotv_old(k), time_in, time_prev
+      enddo
+
+      do k=1,nsurft
+      do l=k+1,nsurft
+        if (pema(k)==pema(l)) then 
+          fmag=(eh(l)-eh(k))/1.d-8
+        else
+          fmag=(eh(l)-eh(k))/(pema(l)-pema(k))
+        endif
+        if (fmag>0.d0) then 
+          ktdc(k,l)=0.5*sqrt(fmag)
+        else
+          ktdc(k,l)=0.d0
+        endif
+      enddo
+      enddo
+      do k=1,nsurft
+      do l=1,nsurft
+        if (l<k) then 
+          ktdc(k,l)=-ktdc(l,k)
+        endif
+      enddo
+      enddo
+      endif ! if (istep>=1) then
+
+      !write(6,*) 'ktdc'
+      !do k=1,nsurft
+      !do l=1,nsurft
+      !  write(6,*) k,l,ktdc(k,l)
+      !enddo
+      !enddo
+
+      !=====remove kappaTDC for dissociation limits
+      do k=1, couplingdecay
+        if (distance(decay_pairs(k,1),decay_pairs(k,2)).gt.decay_threshold(k)) then
+          ktdc(:,:)=0.d0
+        endif
+      enddo
+
+      !====manipulate ktdc
+      ! This is needed becasue when adaptive time step is too small,
+      ! the finite difference of kTDC (gradient form) is unstable. 
+      is_laststep=1
+      do k=1,nsurft
+      do l=1,nsurft
+        if (ktdc_old(k,l).ne.999.9) then
+          is_laststep=0
+        endif
+      enddo
+      enddo
+
+      if (is_laststep==0) then ! the kTDC is not from last step ktdc
+        ! if dt is greater than 1.0, then it's ok, save it
+        if ((time_in-time_prev)>ktdc_threshold) then
+          ktdc_old(:,:)=ktdc(:,:)
+        ! else, use the previous ktdc
+        else 
+          ktdc(:,:)=ktdc_old(:,:)
+        endif 
+      else ! this kTDC is from last step 
+        ! if dt is greater than 1.0, then it's ok, save it
+        if ((time_in-time_prev)>ktdc_threshold) then
+          ktdc_old(:,:)=ktdc(:,:)
+        ! else, compute it with dt=1.0, which is just ktdc
+        ! and save it. 
+        else
+          ktdc_old(:,:)=ktdc(:,:)
+        endif
+      endif
+      
+      !====compute effective NAC
+      if (methflag.eq.6) then
+      nacgv(:,:,:,:)=0.d0
+
+      if (istep>=2) then
+      gdiff(:,:,:,:)=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        gdiff(i,j,k,l)=gpema(i,j,k)-gpema(i,j,l)
+      enddo
+      enddo
+      enddo
+      enddo
+
+      !compute velocity norm, and vdotgdiff
+      normv=0.d0
+      vdotgdiff(:,:)=0.d0
+      do i=1,3
+      do j=1,natoms
+        normv=normv+ppm(i,j)/mmm(j)*ppm(i,j)/mmm(j)
+      enddo
+      enddo
+      normv=sqrt(normv)
+
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        vdotgdiff(k,l)=vdotgdiff(k,l)+ppm(i,j)/mmm(j)*gdiff(i,j,k,l)
+      enddo
+      enddo
+      enddo
+      enddo
+
+      nacgv(:,:,:,:)=0.d0
+      fac1(:,:)=0.d0
+      fac2(:,:)=0.d0
+      do k=1,nsurft
+      do l=k+1,nsurft
+        if (ktdc(k,l).ne.0.d0) then
+          fac1(k,l)=(ktdc(k,l)-vdotgdiff(k,l))/normv/normv
+          fac2(k,l)=1.d0
+          do i=1,3
+          do j=1,natoms
+            nacgv(i,j,k,l)=fac1(k,l)*ppm(i,j)/mmm(j)+fac2(k,l)*gdiff(i,j,k,l)
+            nacgv(i,j,l,k)=-nacgv(i,j,k,l)
+          enddo
+          enddo
+          fac1(l,k)=-fac1(k,l)
+          fac2(l,k)=-fac2(k,l)
+          !write(6,'(I3,X,I3,X,F30.15,X,F30.15,X,F9.4,X,F9.4)') k,l,fac1(k,l),fac2(k,l),normv,vdotgdiff(k,l)
+        else ! tdc is exactly zero, set efffective NAC as zero 
+          fac1(k,l)=-99.d0
+          fac2(k,l)=-99.d0
+          fac1(l,k)=-99.d0
+          fac2(l,k)=-99.d0
+          do i=1,3
+          do j=1,natoms
+            nacgv(i,j,k,l)=0.d0
+            nacgv(i,j,l,k)=0.d0
+          enddo
+          enddo 
+        endif
+      enddo
+      enddo
+      endif ! if (istep>=1) then
+
+      !== do NACGV projection
+      call projection(xxm, natoms, projector)
+      nacvector=0.d0
+      projected_nacgv=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        nacvector((j-1)*3+i)=nacgv(i,j,k,l)
+      enddo
+      enddo
+      !projected_nacgv_vector=MATMUL(projector, nacvector)
+      call dgemm('N','N',3*natoms,1,3*natoms,1.d0,projector,3*natoms,nacvector,3*natoms,0.d0,projected_nacgv_vector,3*natoms)
+      do i=1,3
+      do j=1,natoms
+        projected_nacgv(i,j,k,l)=projected_nacgv_vector((j-1)*3+i)
+        enddo
+        enddo
+      enddo
+      enddo
+      nacgv(:,:,:,:)=projected_nacgv(:,:,:,:)
+
+
+      vdotnacgv(:,:)=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        vdotnacgv(k,l)=vdotnacgv(k,l)+ppm(i,j)/mmm(j)*nacgv(i,j,k,l)
+      enddo
+      enddo
+      enddo
+      enddo
+      endif ! if (methflag.eq.6) then
+
+      if (methflag.eq.7) then 
+      vdotnac(:,:)=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        vdotnac(k,l)=vdotnac(k,l)+ppm(i,j)/mmm(j)*dvec(i,j,k,l)
+      enddo
+      enddo
+      enddo
+      enddo
+      endif
+
+      if (methflag.eq.8) then 
+      vdotvvib=0.d0
+      do i=1,3
+      do j=1,natoms
+        velocity_vector((j-1)*3+i)=ppm(i,j)/mmm(j)
+      enddo
+      enddo
+      projected_velocity_vector=MATMUL(projector, velocity_vector)
+      do i=1,3
+      do j=1,natoms
+        vibrational_velocity(i,j)=projected_velocity_vector((j-1)*3+i)
+      enddo
+      enddo
+
+      vdotvvib=0.d0
+      do i=1,3
+      do j=1,natoms
+        vdotvvib=vdotvvib+ppm(i,j)/mmm(j)*vibrational_velocity(i,j)
+      enddo
+      enddo
+      endif
+
+
+      if (methflag.eq.9) then 
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        sumgrad(i,j,k,l)=0.5*(gpema(i,j,k)+gpema(i,j,l))
+      enddo
+      enddo
+      enddo
+      enddo
+      projected_sumgrad=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        sumgrad_vector((j-1)*3+i)=sumgrad(i,j,k,l)
+      enddo
+      enddo
+      projected_sumgrad_vector=MATMUL(projector, sumgrad_vector)
+      !call dgemm('N','N',3*natoms,1,3*natoms,1.d0,projector,3*natoms,nacvector,3*natoms,0.d0,projected_nacgv_vector,3*natoms)
+      do i=1,3
+      do j=1,natoms
+        projected_sumgrad(i,j,k,l)=projected_nacgv_vector((j-1)*3+i)
+        enddo
+        enddo
+      enddo
+      enddo
+      sumgrad=projected_sumgrad
+      vdotsumgrad(:,:)=0.d0
+      do k=1,nsurft
+      do l=1,nsurft
+      do i=1,3
+      do j=1,natoms
+        vdotsumgrad(k,l)=vdotsumgrad(k,l)+ppm(i,j)/mmm(j)*projected_sumgrad(i,j,k,l)
+      enddo
+      enddo
+      enddo
+      enddo
+
+      endif
+
+
+
+      if (repflag.eq.1) then
+!       diabatic representation
+        write(6,*)'Curvature-driven methods work better for',&
+        &'adiabatic representation'
+        stop
+
+      else if (repflag.eq.0) then
+!       adiabatic representation
+        pe = 0.d0
+        do k=1,nsurft
+          pe = pe + rhor(k,k)*pema(k)
+        enddo
+
+        gv=0.d0
+        do k=1,nsurft
+          gv(:,:) = gv(:,:) + rhor(k,k)*gpema(:,:,k)
+        enddo
+
+        if(intflag.ne.8) then
+          do k=1,nsurft
+          do l=1,nsurft
+            tmp = phase(l)-phase(k)
+            sntmp = sin(tmp)
+            cstmp = cos(tmp)
+            rhotmp = rhor(l,k)*cstmp-rhoi(l,k)*sntmp
+            if (ktdc(k,l).ne.0.d0) then 
+              if (methflag.eq.6 .and. vdotnacgv(k,l).ne.0.d0) then 
+                gv(:,:)=gv(:,:)-2.d0*rhotmp*ktdc(k,l)/vdotnacgv(k,l)*nacgv(:,:,k,l)*pema(k)
+              else if (methflag.eq.7 .and. vdotnac(k,l).ne.0.d0) then 
+                gv(:,:)=gv(:,:)-2.d0*rhotmp*ktdc(k,l)/vdotnac(k,l)*dvec(:,:,k,l)*pema(k)
+              else if (methflag.eq.8 .and. vdotvvib.ne.0.d0) then
+                gv(:,:)=gv(:,:)-2.d0*rhotmp*ktdc(k,l)/vdotvvib*vibrational_velocity(:,:)*pema(k)
+              else if (methflag.eq.9 .and. vdotsumgrad(k,l).ne.0.d0) then 
+                gv(:,:)=gv(:,:)-2.d0*rhotmp*ktdc(k,l)/vdotsumgrad(k,l)*sumgrad(:,:,k,l)*pema(k)
+              endif
+            endif
+          enddo
+          enddo
+        else
+          do i=1,nsurft
+          do l=1,nsurft
+            if (ktdc(k,l).ne.0.d0) then
+              if (methflag.eq.6 .and. vdotnacgv(k,l).ne.0.d0) then
+                gv(:,:)=gv(:,:)-2.d0*rhor(l,k)*ktdc(k,l)/vdotnacgv(k,l)*nacgv(:,:,k,l)*pema(k)
+              else if (methflag.eq.7 .and. vdotnac(k,l).ne.0.d0) then
+                gv(:,:)=gv(:,:)-2.d0*rhor(l,k)*ktdc(k,l)/vdotnac(k,l)*dvec(:,:,k,l)*pema(k)
+              else if (methflag.eq.8 .and. vdotvvib.ne.0.d0) then
+                gv(:,:)=gv(:,:)-2.d0*rhor(l,k)*ktdc(k,l)/vdotvvib*vibrational_velocity(:,:)*pema(k)
+              else if (methflag.eq.9 .and. vdotsumgrad(k,l).ne.0.d0) then
+                gv(:,:)=gv(:,:)-2.d0*rhor(l,k)*ktdc(k,l)/vdotsumgrad(k,l)*sumgrad(:,:,k,l)*pema(k)
+              endif
+            endif
+          enddo
+          enddo
+        endif
+      else
+        write(6,*)'REPFLAG = ',repflag,' in GETGRAD'
+        stop
+      endif
+
+      ELSE
+
+      write(6,*)'METHFLAG = ',methflag,' is not allowed in GETGRAD'
+      stop
+
+      ENDIF ! IF (METHFLAG.EQ.0.OR.METHFLAG.EQ.1.OR.METHFLAG.EQ.5) THEN
+
+! FOR USE BY CSDM, MAGNITUDE OF D
+      if ((methflag.eq.4.or.methflag.eq.7).and.repflag.eq.0) then
+!       compute sum of magnitude of coupled DVECs
+        dmag = 0.d0
+        dsum2 = 0.d0
+        do k=1,nsurft
+          if (k.ne.nsurf) then
+            dsum2 = 0.d0
+            do i=1,3
+            do j=1,natoms
+              dsum2 = dsum2 + dvec(i,j,k,nsurf)**2
+            enddo
+            enddo
+          endif
+          dsum2 = max(0.d0,dsum2)
+          dsum2 = sqrt(dsum2)
+          dmag = dmag + dsum2
+        enddo
+      endif
+
+! FOR kappaCSDM, we use CSDM-C
+      if ( (methflag.eq.6 .or. methflag.eq.8 .or. methflag.eq.9) .and.repflag.eq.0) then
+        dmag = 0.d0
+        do k=1,nsurft
+          if (k.ne.nsurf) then
+            dsum2=abs(ktdc(k,l))
+          endif
+          dmag = dmag + dsum2
+        enddo
+      endif
+
+
+! TIME-DERIVATIVES OF THE ELECTRONIC COORDINATES
+!     All methods, DM methods add terms later
+        if (repflag.eq.1) then
+! RVM If we're not using Mike Hack's method define phop as before
+         if(intflag.ne.6 .and. intflag.ne.8) then
+!         diabatic rep
+          do i=1,nsurft
+            gcim(i) = 0.d0
+            gcre(i) = 0.d0
+            do j=1,nsurft
+! integrate whole coefficient
+!              gcre(i) = gcre(i) - cim(j)*pemd(i,j)
+!              gcim(i) = gcim(i) + cre(j)*pemd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr = -(sntmp*cre(j)-cstmp*cim(j))*pemd(i,j)
+                tmpi = -(sntmp*cim(j)+cstmp*cre(j))*pemd(i,j)
+                gcre(i) = gcre(i) + tmpr
+                gcim(i) = gcim(i) + tmpi
+                if (i.eq.nsurf) then
+                  phop(j) = -2.d0*(tmpr*cre(i)+tmpi*cim(i)) &
+                     /(cre(i)**2+cim(i)**2)
+                endif
+              endif
+! end
+            enddo
+          enddo
+         elseif(intflag.eq.8) then  
+           do i=1,nsurft
+             do j=1,nsurft
+               gcre(i) = gcre(i) - cim(j)*pemd(i,j)
+               gcim(i) = gcim(i) + cre(j)*pemd(i,j)
+               if (i.ne.j .and. i.eq.nsurf) then
+                 phop(i)=-2.d0*pemd(nsurf,i)*rhor(i,nsurf)/rhor(nsurf,nsurf)
+               endif
+             enddo
+           enddo
+!  RVM Mike Hack's method in diabatic rep
+!  Define bjk for hopping probabilities: gkj = (integral(bjk+) + integral(bjk-))/akk
+         elseif(intflag.eq.6) then
+          do i=1,nsurft
+            gcim(i) = 0.d0
+            gcre(i) = 0.d0
+            do j=1,nsurft
+! integrate whole coefficient
+!              gcre(i) = gcre(i) - cim(j)*pemd(i,j)
+!              gcim(i) = gcim(i) + cre(j)*pemd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr = -(sntmp*cre(j)-cstmp*cim(j))*pemd(i,j)
+                tmpi = -(sntmp*cim(j)+cstmp*cre(j))*pemd(i,j)
+                gcre(i) = gcre(i) + tmpr
+                gcim(i) = gcim(i) + tmpi
+              endif
+             enddo
+            enddo
+            do i = 2, nsurft
+             do j = 1, i-1
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr = -(sntmp*cre(j)-cstmp*cim(j))*pemd(i,j)
+                tmpi = -(sntmp*cim(j)+cstmp*cre(j))*pemd(i,j)
+                  bfunc(j,i) = -2.d0*(tmpr*cre(i)+tmpi*cim(i))
+! end
+             enddo
+            enddo
+         endif
+        elseif (repflag.eq.0) then
+!         adiabatic rep
+!         compute velocity-dot-dvec
+          do 10 k=1,nsurft
+          do 10 l=1,nsurft
+          vdotd(k,l) = 0.d0
+          do 10 i=1,3
+          do 10 j=1,natoms
+            vdotd(k,l) = vdotd(k,l) + dvec(i,j,k,l)*ppm(i,j)/mmm(j)
+  10      continue
+!
+! RVM If we're not using Mike Hack's method define phop as before
+         if(intflag.ne.6 .and. intflag.ne.8) then
+          do i=1,nsurft
+! integrate whole coefficient
+!            gcre(i) =  cim(i)*pema(i)
+!            gcim(i) = -cre(i)*pema(i)
+! end
+! integrate phase angle separately
+            gcre(i) = 0.d0
+            gcim(i) = 0.d0
+            do j=1,nsurft
+! end
+! integrate whole coefficient
+!              gcre(i) =  gcre(i) - cre(j)*vdotd(i,j)
+!              gcim(i) =  gcim(i) - cim(j)*vdotd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then 
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*vdotd(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*ktdc(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*ktdc(i,j)
+                endif
+                gcre(i) = gcre(i) + tmpr
+                gcim(i) = gcim(i) + tmpi
+                if (i.eq.nsurf) then
+                  phop(j) = -2.d0*(tmpr*cre(i)+tmpi*cim(i)) &
+                     /(cre(i)**2+cim(i)**2)
+                endif
+               endif
+! end
+            enddo
+          enddo
+        elseif(intflag.eq.8) then
+          do i=1,nsurft
+            gcre(i) =  cim(i)*pema(i)
+            gcim(i) = -cre(i)*pema(i)
+            do j=1,nsurft
+               gcre(i) =  gcre(i) - cre(j)*vdotd(i,j)
+               gcim(i) =  gcim(i) - cim(j)*vdotd(i,j)
+            enddo
+          enddo
+          do i=1,nsurft
+            if (methflag<6) then
+              phop(i)=-2.d0*vdotd(nsurf,i)*rhor(i,nsurf)/rhor(nsurf,nsurf)
+            else
+              phop(i)=-2.d0*ktdc(nsurf,i)*rhor(i,nsurf)/rhor(nsurf,nsurf)
+            endif
+          enddo
+!  RVM Mike Hack's method in adiabatic rep
+!  Define bjk for hopping probabilities: gkj = (integral(bjk+) + integral(bjk-))/akk
+        elseif(intflag.eq.6) then
+          do i=1,nsurft
+! integrate whole coefficient
+!            gcre(i) =  cim(i)*pema(i)
+!            gcim(i) = -cre(i)*pema(i)
+! end
+! integrate phase angle separately
+            gcre(i) = 0.d0
+            gcim(i) = 0.d0
+            do j=1,nsurft
+! end
+! integrate whole coefficient
+!              gcre(i) =  gcre(i) - cre(j)*ktdc(i,j)
+!              gcim(i) =  gcim(i) - cim(j)*ktdc(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*vdotd(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*ktdc(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*ktdc(i,j)
+                endif
+                gcre(i) = gcre(i) + tmpr
+                gcim(i) = gcim(i) + tmpi
+               endif
+             enddo
+            enddo
+            do i = 2, nsurft
+             do j= 1, i-1
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*vdotd(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr = -(cstmp*cre(j)+sntmp*cim(j))*ktdc(i,j)
+                  tmpi = -(cstmp*cim(j)-sntmp*cre(j))*ktdc(i,j)
+                endif
+                bfunc(j,i) = -2.d0*(tmpr*cre(i)+tmpi*cim(i))
+              enddo
+             enddo
+         endif
+! end
+        else
+          write(6,*)'REPFLAG = ',repflag,' in GETGRAD'
+          stop
+        endif
+
+      if (methflag.eq.4.or.methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+!       CSDM
+!       propagate coherent part of the electronic coordinates
+!       put these quantities in CRE and CIM after real coefficients
+!       the integrator will integrate the whole thing
+!       Also compute phop using the coherent variables.  Phop was computed
+!       above using the decoherent variables, here we overwrite it for CSDM.
+        call getrhocsdm(cre,cim,rhorc,rhoic,nsurft)
+        if (repflag.eq.1) then
+! RVM If we're not using Mike Hack's method define phop as before
+         if(intflag.ne.6 .and. intflag.ne.8) then
+!         diabatic rep
+          do i=1,nsurft
+            i2 = i + nsurft
+            gcim(i2) = 0.d0
+            gcre(i2) = 0.d0
+            do j=1,nsurft
+              j2 = j + nsurft
+! integrate whole coefficient
+!              gcre(i2) = gcre(i2) - cim(j2)*pemd(i,j)
+!              gcim(i2) = gcim(i2) + cre(j2)*pemd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr=-(sntmp*cre(j2)-cstmp*cim(j2))*pemd(i,j)
+                tmpi=-(sntmp*cim(j2)+cstmp*cre(j2))*pemd(i,j)
+                gcre(i2)=gcre(i2)+tmpr
+                gcim(i2)=gcim(i2)+tmpi
+                if (i.eq.nsurf) then
+                  phop(j) = -2.d0*(tmpr*cre(i2)+tmpi*cim(i2)) &
+                     /(cre(i2)**2+cim(i2)**2)
+                endif
+              endif
+! end
+            enddo
+          enddo
+         elseif(intflag.eq.8) then
+           do i=1,nsurft
+             i2 = i + nsurft
+             do j=1,nsurft
+               j2 = j + nsurft
+               gcre(i2) = gcre(i2) - cim(j2)*pemd(i,j)
+               gcim(i2) = gcim(i2) + cre(j2)*pemd(i,j)
+               if (i.ne.j .and. i.eq.nsurf) then
+                 phop(i)=-2.d0*pemd(nsurf,i)*rhorc(i,nsurf)/rhorc(nsurf,nsurf)
+               endif
+             enddo
+           enddo
+!  RVM Mike Hack's method in diabatic rep
+!  Define bjk for hopping probabilities: gkj = (integral(bjk+) + integral(bjk-))/akk
+         elseif(intflag.eq.6) then
+          do i=1,nsurft
+            i2 = i + nsurft
+            gcim(i2) = 0.d0
+            gcre(i2) = 0.d0
+            do j=1,nsurft
+              j2 = j + nsurft
+! integrate whole coefficient
+!              gcre(i2) = gcre(i2) - cim(j2)*pemd(i,j)
+!              gcim(i2) = gcim(i2) + cre(j2)*pemd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr=-(sntmp*cre(j2)-cstmp*cim(j2))*pemd(i,j)
+                tmpi=-(sntmp*cim(j2)+cstmp*cre(j2))*pemd(i,j)
+                gcre(i2)=gcre(i2)+tmpr
+                gcim(i2)=gcim(i2)+tmpi
+              endif
+             enddo
+            enddo
+            do i = 2, nsurft
+              i2 = i + nsurft
+             do j = 1, i-1
+               j2 = j + nsurft
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                tmpr = -(sntmp*cre(j2)-cstmp*cim(j2))*pemd(i,j)
+                tmpi = -(sntmp*cim(j2)+cstmp*cre(j2))*pemd(i,j)
+                  bfunc(j,i) = -2.d0*(tmpr*cre(i2)+tmpi*cim(i2))
+! end
+             enddo
+            enddo
+           endif
+        elseif (repflag.eq.0) then
+! RVM If we're not using Mike Hack's method define phop as before
+         if(intflag.ne.6) then
+          do i=1,nsurft
+            i2 = i + nsurft
+! integrate whole coefficient
+!            gcre(i2) =  cim(i2)*pema(i)
+!            gcim(i2) = -cre(i2)*pema(i)
+! end
+! integrate phase angle separately
+            gcim(i2) = 0.d0
+            gcre(i2) = 0.d0
+! end
+            do j=1,nsurft
+              j2 = j + nsurft
+! integrate whole coefficient
+!              gcre(i2) =  gcre(i2) - cre(j2)*vdotd(i,j)
+!              gcim(i2) =  gcim(i2) - cim(j2)*vdotd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*vdotd(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*ktdc(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*ktdc(i,j)
+                endif
+                gcre(i2)=gcre(i2)+tmpr
+                gcim(i2)=gcim(i2)+tmpi
+                if (i.eq.nsurf) then
+                  phop(j) = -2.d0*(tmpr*cre(i2)+tmpi*cim(i2)) &
+                     /(cre(i2)**2+cim(i2)**2)
+                endif
+               endif
+             enddo
+            enddo
+        elseif(intflag.eq.8) then
+          do i=1,nsurft
+            i2 = i + nsurft
+            gcre(i2) =  cim(i2)*pema(i)
+            gcim(i2) = -cre(i2)*pema(i)
+            do j=1,nsurft
+               j2 = j + nsurft
+               gcre(i2) =  gcre(i2) - cre(j2)*vdotd(i,j)
+               gcim(i2) =  gcim(i2) - cim(j2)*vdotd(i,j)
+            enddo
+          enddo
+          do i=1,nsurft
+            if (methflag<6) then
+              phop(i)=-2.d0*vdotd(nsurf,i)*rhorc(i,nsurf)/rhorc(nsurf,nsurf)
+            else
+              phop(i)=-2.d0*ktdc(nsurf,i)*rhorc(i,nsurf)/rhorc(nsurf,nsurf)
+            endif
+          enddo
+!  RVM Mike Hack's method in adiabatic rep
+!  Define bjk for hopping probabilities: gkj = (integral(bjk+) + integral(bjk-))/akk
+        elseif(intflag.eq.6) then
+          do i=1,nsurft
+            i2 = i + nsurft
+! integrate whole coefficient
+!            gcre(i2) =  cim(i2)*pema(i)
+!            gcim(i2) = -cre(i2)*pema(i)
+! end
+! integrate phase angle separately
+            gcim(i2) = 0.d0
+            gcre(i2) = 0.d0
+! end
+            do j=1,nsurft
+              j2 = j + nsurft
+! integrate whole coefficient
+!              gcre(i2) =  gcre(i2) - cre(j2)*vdotd(i,j)
+!              gcim(i2) =  gcim(i2) - cim(j2)*vdotd(i,j)
+! end
+! integrate phase angle separately
+              if (i.ne.j) then
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*vdotd(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*ktdc(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*ktdc(i,j)
+                endif
+                gcre(i2)=gcre(i2)+tmpr
+                gcim(i2)=gcim(i2)+tmpi
+              endif
+             enddo
+            enddo
+            do i = 2, nsurft
+             i2 = i + nsurft
+             do j= 1, i-1
+               j2 = j + nsurft
+                tmp = phase(j)-phase(i)
+                sntmp = sin(tmp)
+                cstmp = cos(tmp)
+                if (methflag<6) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*vdotd(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*vdotd(i,j)
+                else if (methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+                  tmpr=-(cstmp*cre(j2)+sntmp*cim(j2))*ktdc(i,j)
+                  tmpi=-(cstmp*cim(j2)-sntmp*cre(j2))*ktdc(i,j)
+                endif
+                bfunc(j,i) = -2.d0*(tmpr*cre(i2)+tmpi*cim(i2))
+
+              enddo
+             enddo
+          endif
+! end
+        else
+          write(6,*)'REPFLAG = ',repflag,' in GETGRAD'
+          stop
+        endif
+      endif
+
+! SPECIAL DM TERMS for TFS-EDC or FSTU-EDC
+      if (is_edc.eq.1) then 
+        call getrho(cre,cim,rhor,rhoi,nsurft)
+        Ekin=0.d0
+        do i=1,3
+          do j=1,natoms
+            Ekin=Ekin+0.5*ppm(i,j)*ppm(i,j)/mmm(j)
+          enddo
+        enddo
+        do k=1,nsurft
+          if (k.ne.nsurf) then
+            if (repflag.eq.0) tmp = dabs(pema(k)-pema(nsurf))
+            if (repflag.eq.1) tmp = dabs(pemd(k,k)-pemd(nsurf,nsurf))
+            taui(k) = tmp/(Cparam+E0param/Ekin)
+          else 
+            taui(k) = 0.d0
+          endif 
+        enddo
+        gcred(nsurf) = 0.d0
+        gcimd(nsurf) = 0.d0
+        do k=1,nsurft
+          if (k.ne.nsurf) then
+            gcred(nsurf) = gcred(nsurf) + rhor(k,k)*taui(k)
+            gcimd(nsurf) = gcimd(nsurf) + rhor(k,k)*taui(k)     
+            gcred(k) = -0.5d0*taui(k)*cre(k)
+            gcimd(k) = -0.5d0*taui(k)*cim(k)
+          endif
+       enddo
+       if (abs(rhor(nsurf,nsurf)).gt.tinyrho) then
+         gcred(nsurf) = gcred(nsurf)*0.5d0*cre(nsurf)/rhor(nsurf,nsurf)
+         gcimd(nsurf) = gcimd(nsurf)*0.5d0*cim(nsurf)/rhor(nsurf,nsurf)
+       else
+         goto 99
+       endif 
+       do k=1,nsurft
+         gcre(k) = gcre(k) + gcred(k)
+         gcim(k) = gcim(k) + gcimd(k)
+       enddo
+      endif 
+
+! SPECIAL DM TERMS
+      dmag = 0.d0
+      if (methflag.eq.3.or.methflag.eq.4.or.methflag.eq.6.or.methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+!       DM methods
+!       compute pvib
+        if (natoms.eq.3) then
+          call pjsplit(xxm,ppm,mmm,ppvib)
+         else
+!         THIS PART (FOR MORE THAN 3 ATOMS) HASN'T BEEN TESTED
+         do i=1,3
+          do j=1,natoms
+            ppvib(i,j) = ppm(i,j)
+          enddo
+         enddo
+         call angmom(iflinear,bigjm,ppvib,xxm,natoms,bigjtm)
+         call noang(iflinear,bigjm,ppvib,xxm,mmm,natoms)
+        endif
+
+        do k=1,nsurft
+        if (k.eq.nsurf) then
+!       skip
+        else
+!         compute 'reduced' nonadiabatic coupling for states k and l
+          if (repflag.eq.1) then
+!           diabatic
+            u2b2(1,1) = pemd(k,k)
+            u2b2(1,2) = pemd(k,nsurf)
+            u2b2(2,1) = pemd(nsurf,k)
+            u2b2(2,2) = pemd(nsurf,nsurf)
+            do i=1,3
+            do j=1,natoms
+              gu2b2(i,j,1,1) = gpemd(i,j,k,k)
+              gu2b2(i,j,1,2) = gpemd(i,j,k,nsurf)
+              gu2b2(i,j,2,1) = gpemd(i,j,nsurf,k)
+              gu2b2(i,j,2,2) = gpemd(i,j,nsurf,nsurf)
+            enddo
+            enddo
+            call getdvec2(natoms,u2b2,gu2b2,dvec2b2)
+! RVM These lines added from beginning of subroutine
+! FOR USE BY CSDM, MAGNITUDE OF D
+      if (methflag.eq.4 .or. methflag.eq.7.or.methflag.eq.8.or.methflag.eq.9) then
+!       compute sum of magnitude of coupled DVECs
+           dsum2 = 0.d0
+            do i=1,3
+            do j=1,natoms
+              dsum2 = dsum2 + dvec2b2(i,j)**2
+            enddo
+            enddo
+          dsum2 = max(0.d0,dsum2)
+          dsum2 = sqrt(dsum2)
+          dmag = dmag + dsum2
+      endif
+          else
+!           adiabatic rep
+!           just use real DVEC
+            if (methflag<6 .or. methflag.eq.7) then 
+              do i=1,3
+              do j=1,natoms
+                dvec2b2(i,j) = dvec(i,j,k,nsurf)
+              enddo
+              enddo
+            else if (methflag.eq.6) then 
+              do i=1,3
+              do j=1,natoms
+                dvec2b2(i,j) = nacgv(i,j,k,nsurf)
+              enddo
+              enddo
+            else if (methflag.eq.8) then
+              do i=1,3
+              do j=1,natoms
+                dvec2b2(i,j) = vibrational_velocity(i,j)
+              enddo
+              enddo
+            else if (methflag.eq.9) then
+              do i=1,3
+              do j=1,natoms
+                dvec2b2(i,j) = projected_sumgrad(i,j,k,nsurf)
+              enddo
+              enddo
+            endif
+          endif
+
+!         compute PP dot DVEC2b2 / |DVEC2b2|
+          pdotd = 0.d0
+          dvecmag = 0.d0
+          do i=1,3
+          do j=1,natoms
+!            pdotd = pdotd + dvec2b2(i,j)*ppm(i,j)/mmm(j)
+            pdotd = pdotd + dvec2b2(i,j)*ppvib(i,j)/mmm(j)
+            dvecmag = dvecmag + (dvec2b2(i,j)**2)/mmm(j)
+          enddo
+          enddo
+!         if (dvecmag.lt.1.d-40) then
+          if (dvecmag.lt.1.d-8) then
+          pdotd = 0.d0
+          else
+          dvecmag = sqrt(dvecmag)
+          pdotd = pdotd/dvecmag
+          endif
+
+!         compute SVEC(i,j,k) = DVEC2b2*PP_DVEC+PPVIB
+          smagms = 0.d0
+          do i=1,3
+          do j=1,natoms
+            svec(i,j,k)=dvec2b2(i,j)*pdotd+ppvib(i,j)
+            smagms = smagms + (svec(i,j,k)**2)/mmm(j)
+          enddo
+          enddo
+          if (smagms.le.0.d0) then
+!         problem
+          goto 99
+          endif
+          smagms = sqrt(smagms)
+!         Note:  SVEC is not mass-scaled
+!                SMAGMS is the magnitude of the mass-scaled SVEC
+
+!         compute energy along s vector (ES)
+          ps(k) = 0.d0
+          do i=1,3
+          do j=1,natoms
+!           use mass-scaling, SMAGMS normalizes the mass-scaled SVEC
+!           when computing ES
+            ps(k) = ps(k) + svec(i,j,k)*ppm(i,j)/mmm(j)
+          enddo
+          enddo
+          Es = (ps(k)**2)/(2.d0*smagms**2)
+
+!         compute tau matrix
+!          Cparam = 1.d0
+!  RVM E0 is now an input parameter
+!          E0param = 0.1d0
+          if (repflag.eq.0) tmp = dabs(pema(k)-pema(nsurf))
+          if (repflag.eq.1) tmp = dabs(pemd(k,k)-pemd(nsurf,nsurf))
+!         inverse of tau
+          taui(k) = tmp/(Cparam+E0param/Es)
+          !write(6,'(I3,X,5F30.15)') k,taui(k)/autofs,tmp,Es,ps(k),smagms
+          !do j=1,natoms
+          !  write(6,'(3F30.15)') dvec2b2(1,j),dvec2b2(2,j),dvec2b2(3,j)
+          !enddo
+!         write(6,*) 'taui(k)',taui(k)*autofs
+!         if(taui(k).gt.0.1d0) then
+!            write(6,*) 'taui(k)', taui(k)*autofs
+!            write(6,*) 'tmp ',tmp
+!            write(6,*) 'Es  ',Es
+!            write(6,*) 'smagms ', smagms
+!            write(6,*) 'ps(k)  ', ps(k)
+!         endif
+!         if(taui(k)*autofs.gt.0.1d0) then
+!         if(abs(cre(3)).gt.1d0) then
+!           write(6,*) 'taui(k)', autofs/taui(k)
+!           write(6,*) 'U matrix'
+!           write(6,'(3f10.4)')  pemd(1,1),pemd(1,2),pemd(1,3)
+!           write(6,'(3f10.4)')  pemd(2,1),pemd(2,2),pemd(2,3)
+!           write(6,'(3f10.4)')  pemd(3,1),pemd(3,2),pemd(3,3)
+!           write(6,*) 'Geometry'
+!           do i = 1, natoms
+!              write(6,*) (xxm(j,i)*autoang,j=1,3)
+!           enddo
+!           write(6,'(a,3f10.4)')'gcre ', cre(1),cre(2),cre(3)
+!           write(6,'(a,3f10.4)')'gcre ', gcre(1),gcre(2),gcre(3)
+!         endif
+        endif
+        taui(nsurf) = 0.d0
+        enddo
+
+!       compute decoherent time-derivs of electronic coords
+        gcred(nsurf) = 0.d0
+        gcimd(nsurf) = 0.d0
+        do k=1,nsurft
+          if (k.ne.nsurf) then
+          gcred(nsurf) = gcred(nsurf) + rhor(k,k)*taui(k)
+          gcimd(nsurf) = gcimd(nsurf) + rhor(k,k)*taui(k)
+          gcred(k) = -0.5d0*taui(k)*cre(k)
+          gcimd(k) = -0.5d0*taui(k)*cim(k)
+          endif
+        enddo
+!       if (rhor(nsurf,nsurf).ne.0.d0) then
+! JZ 2014
+        if (abs(rhor(nsurf,nsurf)).gt.tinyrho) then
+        gcred(nsurf) = gcred(nsurf)*0.5d0*cre(nsurf)/rhor(nsurf,nsurf)
+        gcimd(nsurf) = gcimd(nsurf)*0.5d0*cim(nsurf)/rhor(nsurf,nsurf)
+        else
+        goto 99
+        endif
+
+!         adiabatic
+!       compute time-deriv of decoherent potential
+        do k=1,nsurft
+        vd(k) = 0.d0
+        enddo
+        if (repflag.eq.1) then
+!         diabatic
+          do k=1,nsurft
+!           diagonal terms
+            if (k.ne.nsurf) then
+              vd(k) = vd(k) - rhor(k,k)*taui(k)*pemd(k,k)
+            elseif (k.eq.nsurf) then
+              do l=1,nsurft
+                if (l.ne.k) then
+                  vd(l) = vd(l) + rhor(l,l)*taui(l)*pemd(k,k)
+                endif
+              enddo
+            else
+              write(6,*)'Strange things in GETGRAD (1)...'
+              stop
+            endif
+            do l=1,nsurft
+!             off-diagonal terms
+              tmp = phase(l)-phase(k)
+              sntmp = sin(tmp)
+              cstmp = cos(tmp)
+              tmpr=rhor(k,l)*cstmp+rhoi(k,l)*sntmp
+              if (k.ne.nsurf.and.l.ne.nsurf.and.k.ne.l) then
+                vd(k)=vd(k)-0.5d0*(taui(k)+taui(l))*tmpr*pemd(k,l)
+              elseif (k.eq.nsurf.and.l.ne.nsurf) then
+                vd(l) = vd(l)-0.5d0*taui(l)*tmpr*pemd(k,l)
+                do m=1,nsurft
+                  if (m.ne.nsurf) then
+                    vd(m) = vd(m) + 0.5d0*rhor(m,m)*taui(m)/ &
+                            rhor(nsurf,nsurf)*tmpr*pemd(k,l)
+                  endif
+                enddo
+              elseif (l.eq.nsurf.and.k.ne.nsurf) then
+                vd(k) = vd(k)-0.5d0*taui(k)*tmpr*pemd(k,l)
+                do m=1,nsurft
+                  if (m.ne.nsurf) then
+                    vd(m) = vd(m) + 0.5d0*rhor(m,m)*taui(m)/ &
+                            rhor(nsurf,nsurf)*tmpr*pemd(k,l)
+                  endif
+                enddo
+              endif
+            enddo
+          enddo
+        else
+          do k=1,nsurft
+!           diagonal terms
+            if (k.ne.nsurf) then
+              vd(k) = vd(k) - rhor(k,k)*taui(k)*pema(k)
+            elseif (k.eq.nsurf) then
+              do l=1,nsurft
+                if (l.ne.k) then
+                  vd(l) = vd(l) + rhor(l,l)*taui(l)*pema(k)
+                endif
+              enddo
+            else
+              write(6,*)'Strange things in GETGRAD (1)...'
+              stop
+            endif
+          enddo
+        endif
+
+!       compute decoherent force
+        do i=1,3
+          do j=1,natoms
+              pdeco(i,j) = 0.d0
+            do k=1,nsurft
+              if (k.ne.nsurf) then
+!       magnitude of svec cancels magnitude of svec in ps(k)
+                pdeco(i,j)=pdeco(i,j)-vd(k)*svec(i,j,k)/ps(k)
+              endif
+            enddo
+          enddo
+        enddo
+
+!       add decoherent terms to electronic probs
+        do k=1,nsurft
+          gcre(k) = gcre(k) + gcred(k)
+          gcim(k) = gcim(k) + gcimd(k)
+        enddo
+
+!       add force to grad pe
+!       add the negative so it is like a gradient, its negative will be taken
+!       in XPTOY
+
+        do i=1,3
+          do j=1,natoms
+            gv(i,j) = gv(i,j) - pdeco(i,j)
+          enddo
+        enddo
+      endif
+
+ 99   continue
+!
+! save PEM as the diagonal elements of whichever representation we are using
+      do i=1,nsurft
+        if (repflag.eq.0) then
+        pem(i) = pema(i)
+        do j=1,3
+        do k=1,natoms
+          gpem(j,k,i) = gpema(j,k,i)
+        enddo
+        enddo
+        else
+        pem(i) = pemd(i,i)
+        do j=1,3
+        do k=1,natoms
+          gpem(j,k,i) = gpemd(j,k,i,i)
+        enddo
+        enddo
+        endif
+      enddo
+
+! for single surface trajectories
+      else
+        pe = pema(nsurf)
+        pem(1) = pema(1)
+        do i=1,3
+        do j=1,natoms
+          gv(i,j)=gpema(i,j,nsurf)
+        enddo
+        enddo
+        gcre(1) = 0.d0
+        gcim(1) = 0.d0
+      endif
+
+ 111  format(1x,100g10.3)
+
+! Output that was used for debugging. 
+      !write(6,*) 'istep',istep
+      !write(6,*) 'time_in', time_in
+      !write(6,*) 'xxm'
+      !do j=1,natoms
+      !write(6,*) xxm(1,j), xxm(2,j), xxm(3,j)
+      !enddo
+      !write(6,*) 'ppm'
+      !do j=1,natoms
+      !write(6,*) ppm(1,j), ppm(2,j), ppm(3,j)
+      !enddo
+      !write(6,*) 'ppm_old'
+      !do j=1,natoms
+      !write(6,*) ppm_old(1,j), ppm_old(2,j), ppm_old(3,j)
+      !enddo
+      !do k=1,nsurft
+      !write(6,*) 'gpema', k
+      !do j=1,natoms
+      !write(6,*) gpema(1,j,k), gpema(2,j,k), gpema(3,j,k)
+      !enddo
+      !enddo
+      !do k=1,nsurft
+      !write(6,*) 'gpema_old', k
+      !do j=1,natoms
+      !write(6,*) gpema_old(1,j,k), gpema_old(2,j,k), gpema_old(3,j,k)
+      !enddo
+      !enddo
+      !do k=1,nsurft
+      !write(6,*) 'rho',k, rhor(k,k)
+      !enddo
+      !do k=1,nsurft
+      !do l=k+1,nsurft
+      !write(6,*) 'NAC',k,l
+      !do j=1,natoms
+      !write(6,*) dvec(1,j,k,l),dvec(2,j,k,l),dvec(3,j,k,l)
+      !enddo
+      !enddo
+      !enddo
+      !write(6,*) 'TDC'
+      !do k=1,nsurft
+      !do l=1,nsurft
+      !write(6,*) k,l, vdotd(k,l)
+      !enddo
+      !enddo
+      !write(6,*) 'electronic gradient'
+      !do k=1,nsurft
+      !write(6,*) k, gcre(k), gcim(k)
+      !enddo
+      !write(6,*) 'electronic coefficients'
+      !do k=1,nsurft
+      !write(6,*) k, cre(k), cim(k)
+      !enddo
+      !write(6,*) 'final adiabatic gradient'
+      !write(6,*) 'adiabatic gradient'
+      !testgv(:,:) = 0.d0
+      !do k=1,nsurft
+      !testgv(:,:) = testgv(:,:) + rhor(k,k)*gpema(:,:,k)
+      !enddo
+      !do j=1,natoms
+      !write(6,*) testgv(1,j), testgv(2,j), testgv(3,j)
+      !enddo
+      !write(6,*) 'nonadiabatic factor'
+      !do i=1,nsurft
+      !do j=i+1,nsurft
+      !  write(6,'(I2,X,I2,X,F25.10,X,F25.10,X,F25.10)') i,j, ktdc(k,l),vdotnacgv(k,l),ktdc(k,l)/vdotnacgv(k,l)
+      !enddo
+      !enddo
+      !write(6,*) 'final full gradient'
+      !do j=1,natoms
+      !write(6,'(F25.10,X,F25.10,X,F25.10)') gv(1,j), gv(2,j), gv(3,j)
+      !enddo
+
+      !normg=0.d0
+      !do j=1,natoms
+      !do i=1,3
+      !normg=normg+gv(i,j)*gv(i,j)
+      !enddo
+      !enddo
+      !normg=sqrt(normg)
+
+      !if (normg>10.0) then 
+      !write(6,*) 'final adiabatic gradient'
+      !testgv(:,:) = 0.d0
+      !do k=1,nsurft
+      !testgv(:,:) = testgv(:,:) + rhor(k,k)*gpema(:,:,k)
+      !enddo
+      !do j=1,natoms
+      !write(6,*) testgv(1,j), testgv(2,j), testgv(3,j)
+      !enddo
+      !write(6,*) 'final full gradient'
+      !do j=1,natoms
+      !write(6,*) gv(1,j), gv(2,j), gv(3,j)
+      !enddo
+      !write(6,*) ktdc(1,13),vdotd(1,13)
+      !do k=1,nsurft
+      !do l=1,nsurft
+      !write(6,*) 'states',k, l
+      !write(6,*) 'pema(k)', pema(k)
+      !write(6,*) 'ktdc(k,l)', ktdc(k,l)
+      !write(6,*) 'vdotnacgv(k,l)', vdotnacgv(k,l)
+      !write(6,*) 'diff', ktdc(k,l)/vdotnacgv(k,l)
+      !write(6,*) 'fac1', fac1(k,l)
+      !tmp = phase(k)-phase(l)
+      !sntmp = sin(tmp)
+      !cstmp = cos(tmp)
+      !rhotmp = (rhor(k,l)*cstmp-rhoi(k,l)*sntmp)
+      !write(6,*) 'rhotmp', rhotmp
+      !enddo
+      !enddo
+      !do k=1,nsurft
+      !do l=k+1,nsurft
+      !write(6,*) 'NACGV',k,l
+      !do j=1,natoms
+      !write(6,*) nacgv(1,j,k,l),nacgv(2,j,k,l),nacgv(3,j,k,l)
+      !enddo
+      !enddo
+      !enddo
+      !endif
+
+      end subroutine getgrad

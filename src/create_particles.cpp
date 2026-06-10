@@ -31,6 +31,10 @@
 #include "math_const.h"
 #include "memory.h"
 #include "error.h"
+///
+#include "rovib_utils.h"
+#include "init_utils.h"
+#include <tuple>
 
 using namespace SPARTA_NS;
 using namespace MathConst;
@@ -379,6 +383,26 @@ void CreateParticles::create_single()
   double temp_thermal = particle->mixture[imix]->temp_thermal;
   double temp_rot = particle->mixture[imix]->temp_rot;
   double temp_vib = particle->mixture[imix]->temp_vib;
+  double temp_elec = particle->mixture[imix]->temp_elec;
+  
+  
+  std::cout << " IN CREATE SINGLE PART Te,Tv,Tr" << temp_elec << " " <<temp_vib << " " << temp_rot << std::endl; 
+ 
+
+//int eState;
+
+
+/*
+  std::vector<double> cprobs;
+cprobs = readJVProbsFile(0,temp_rot, temp_vib);
+std::vector<jvData> jvdata;
+std::string JVFile = "JV_levels_O2-0.txt";	
+jvdata = read_jv_levels_from_file( JVFile );
+*/
+  
+  
+  
+  
   vstream[0] = vstream[1] = vstream[2] = 0.0;
 
   if (domain->dimension == 2 && x[2] != 0.0)
@@ -420,12 +444,43 @@ void CreateParticles::create_single()
 
   if (iwhich >= 0) {
     int id = MAXSMALLINT*random->uniform();
-    double erot = particle->erot(mspecies,temp_rot,random);
-    double evib = particle->evib(mspecies,temp_vib,random);
-    particle->add_particle(id,mspecies,iwhich,x,v,erot,evib);
+    int eState;
+    double eelec = particle->eelec(mspecies,eState, temp_elec,random);
+	std::cout <<" ESTATE IS " << eState << std::endl;
+
+
+std::vector<double> cprobs;
+std::vector<jvData> jvdata;
+
+std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+jvdata = read_jv_levels_from_file( JVFile );
+
+std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+std::ifstream JVPFileStream(JVPFile);
+
+if (JVPFileStream.good()) {
+        cprobs = readJVProbsFile(0,temp_rot, temp_vib);
+}else{
+        cprobs = genCumulProb( jvdata,eState , temp_rot, temp_vib);
+}
+JVPFileStream.close();
+
+
+
+
+
+
+
+
+    //int eState = getEState(eelec,random->uniform());
+    auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs,mspecies,eState,temp_vib,temp_rot,random);
+
+    std::cout << "SAMPLED EROT EVIB XJ XV : " << erot << " " << evib << " " << xj << " " << xv << std::endl;
+    //double erot = particle->erot(mspecies,temp_rot,random,eState);
+    particle->add_particle(id,mspecies,iwhich,x,v,erot,evib,eelec,xj,xv);
     if (nfix_update_custom)
       modify->update_custom(particle->nlocal-1,temp_thermal,
-                           temp_rot,temp_vib,vstream);
+                           temp_rot,temp_vib,temp_elec,vstream);
   }
 
   delete random;
@@ -537,10 +592,11 @@ void CreateParticles::create_local()
   double temp_thermal = particle->mixture[imix]->temp_thermal;
   double temp_rot = particle->mixture[imix]->temp_rot;
   double temp_vib = particle->mixture[imix]->temp_vib;
+  double temp_elec = particle->mixture[imix]->temp_elec;
 
   int npercell,ncreate,isp,ispecies,id,pflag,subcell;
   double x[3],v[3],xcell[3],vstream_variable[3];
-  double ntarget,scale,rn,vn,vr,theta1,theta2,erot,evib;
+  double ntarget,scale,rn,vn,vr,theta1,theta2,erot,xj,evib,xv,eelec;
   double *lo,*hi;
 
   double tempscale = 1.0;
@@ -548,7 +604,39 @@ void CreateParticles::create_local()
 
   double volsum = 0.0;
   bigint nprev = 0;
+////////////
 
+
+int eState=0;
+int prevEState;
+
+std::vector<double> cprobs;
+std::vector<jvData> jvdata;
+std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";	
+
+//std::string JVFile = "JV_levels_O2-0.txt";	
+
+jvdata = read_jv_levels_from_file( JVFile);
+
+std::cout << std::to_string(static_cast<int>(temp_rot)) <<"   " << std::to_string(static_cast<int>(temp_vib)) << std::endl;
+std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";	 	
+
+std::ifstream JVPFileStream(JVPFile);
+
+std::cout << " ESTATE " << eState << std::endl;
+
+std::cout << " looking for " << JVPFile << std::endl;
+if (JVPFileStream.good()) {
+	std::cout << "Found " << JVPFile << std::endl;
+	cprobs = readJVProbsFile(0,temp_rot, temp_vib);
+}else{
+	std::cout << "Didnt Find " << JVPFile << std::endl;
+	cprobs = genCumulProb(jvdata,eState,temp_rot, temp_vib);
+}
+JVPFileStream.close();
+prevEState= eState;
+
+////////////
   for (int icell = 0; icell < nglocal; icell++) {
     if (cinfo[icell].type == INSIDE) continue;
     if (cells[icell].nsplit > 1) continue;
@@ -658,16 +746,43 @@ void CreateParticles::create_local()
         v[2] = vstream[2] + vr*sin(theta2);
       }
 
+      /*
       erot = particle->erot(ispecies,temp_rot*tempscale,random);
-      evib = particle->evib(ispecies,temp_vib*tempscale,random);
+      evib = particle->evib(ispecies,temp_vib*tempscale, ,random);
+       eelec = particle->eelec(ispecies,temp_elec*tempscale,random);
+       */
 
+  std::cout << " IN CRATE PARTS Te,Tv,Tr, TScale" << temp_elec << " " <<temp_vib << " " << temp_rot << " " << tempscale << std::endl; 
+      eelec = particle->eelec(ispecies,eState, temp_elec*tempscale,random);
+      //int eState = getEState(eelec,random->uniform());
+	std::cout <<" ESTATE IS " << eState << std::endl;
+
+if(eState != prevEState){	
+	std::cout <<" WHICH IS  NEW! LOOKING FOR JV DATA..." << eState << std::endl;
+	std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+	jvdata = read_jv_levels_from_file( JVFile );
+
+	std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+	std::ifstream JVPFileStream(JVPFile);
+
+	if (JVPFileStream.good()) {
+        	cprobs = readJVProbsFile(eState,temp_rot, temp_vib);
+	}else{
+        	cprobs = genCumulProb(jvdata,eState, temp_rot, temp_vib);
+	}
+	JVPFileStream.close();
+    }
+prevEState = eState;
+
+      auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs, ispecies,eState, temp_vib*tempscale,temp_rot*tempscale,random);
+     
       id = MAXSMALLINT*random->uniform();
 
-      particle->add_particle(id,ispecies,icell,x,v,erot,evib);
+      particle->add_particle(id,ispecies,icell,x,v,erot,evib,eelec,xj,xv);
 
       if (nfix_update_custom)
         modify->update_custom(particle->nlocal-1,temp_thermal,
-                             temp_rot,temp_vib,vstream);
+                             temp_rot,temp_vib,temp_elec,vstream);
     }
 
     // increment count without effect of density variation
@@ -785,10 +900,11 @@ void CreateParticles::create_local_twopass()
   double temp_thermal = particle->mixture[imix]->temp_thermal;
   double temp_rot = particle->mixture[imix]->temp_rot;
   double temp_vib = particle->mixture[imix]->temp_vib;
+  double temp_elec = particle->mixture[imix]->temp_elec;
 
   int npercell,ncreate,isp,ispecies,id,pflag,subcell;
   double x[3],v[3],xcell[3],vstream_variable[3];
-  double ntarget,scale,rn,vn,vr,theta1,theta2,erot,evib;
+  double ntarget,scale,rn,vn,vr,theta1,theta2,erot,evib,eelec;
   double *lo,*hi;
 
   double tempscale = 1.0;
@@ -938,14 +1054,16 @@ void CreateParticles::create_local_twopass()
 
       erot = particle->erot(ispecies,temp_rot*tempscale,random);
       evib = particle->evib(ispecies,temp_vib*tempscale,random);
+      int eState;
+      eelec = particle->eelec(ispecies,eState,temp_elec*tempscale,random);
 
       id = MAXSMALLINT*random->uniform();
 
-      particle->add_particle(id,ispecies,icell,x,v,erot,evib);
+      particle->add_particle(id,ispecies,icell,x,v,erot,evib,eelec);
 
       if (nfix_update_custom)
         modify->update_custom(particle->nlocal-1,temp_thermal,
-                             temp_rot,temp_vib,vstream);
+                             temp_rot,temp_vib,temp_elec,vstream);
     }
   }
 

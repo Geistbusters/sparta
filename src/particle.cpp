@@ -29,10 +29,15 @@
 #include "memory.h"
 #include "error.h"
 
+//
+#include "units.h"
+#include "rovib_utils.h"
+#include "init_utils.h"
+#include <map>
 using namespace SPARTA_NS;
 
 enum{PKEEP,PINSERT,PDONE,PDISCARD,PENTRY,PEXIT,PSURF};  // several files
-enum{NONE,DISCRETE,SMOOTH};            // several files
+enum{NONE,DISCRETE,SMOOTH,MD};            // several files
 enum{INT,DOUBLE};                      // several files
 
 #define DELTA 16384
@@ -59,6 +64,7 @@ Particle::Particle(SPARTA *sparta) : Pointers(sparta)
   nspecies = maxspecies = 0;
   species = NULL;
   maxvibmode = 0;
+  maxelecmode = 0;
 
   //maxgrid = 0;
   //cellcount = NULL;
@@ -178,6 +184,21 @@ void Particle::init()
       }
     }
   }
+  // if elecstyle = DISCRETE,
+  // all species with elecdof > 0 must have info read from a species.elec file
+
+  if (collide && collide->elecstyle == DISCRETE) {
+    for (int isp = 0; isp < nspecies; isp++) {
+      if (species[isp].elecdof == 1) continue;
+      if (species[isp].elecdiscrete_read == 0) {
+        char str[128];
+        sprintf(str,"Discrete electronical info for species %s not read in",
+                species[isp].id);
+        error->all(FLERR,str);
+      }
+    }
+    }
+  
 
   // reallocate cellcount and first lists as needed
   // NOTE: when grid becomes dynamic, will need to do this in sort()
@@ -624,7 +645,7 @@ void Particle::grow_next()
 ------------------------------------------------------------------------- */
 
 int Particle::add_particle(int id, int ispecies, int icell,
-                           double *x, double *v, double erot, double evib)
+                           double *x, double *v, double erot, double evib, double eelec, double xj =0.0, double xv=0.0 )
 {
   int reallocflag = 0;
   if (nlocal == maxlocal) {
@@ -633,6 +654,9 @@ int Particle::add_particle(int id, int ispecies, int icell,
   }
 
   OnePart *p = &particles[nlocal];
+
+  std::cout << "MAKING PARTICLE: XJ , XV : " << xj  << " " <<xv << std::endl;
+  std::cout << "MAKING PARTICLE: EROT , EVIB : " << erot  << " " << evib << std::endl;
 
   p->id = id;
   p->ispecies = ispecies;
@@ -645,6 +669,9 @@ int Particle::add_particle(int id, int ispecies, int icell,
   p->v[2] = v[2];
   p->erot = erot;
   p->evib = evib;
+  p->xj = xj;
+  p->xv = xv;
+  p->eelec = eelec;
   p->flag = PKEEP;
 
   //p->dtremain = 0.0;    not needed due to memset in grow() ??
@@ -655,6 +682,20 @@ int Particle::add_particle(int id, int ispecies, int icell,
   nlocal++;
   return reallocflag;
 }
+
+int Particle::add_particle(int id, int ispecies, int icell, double *x, double *v, 
+                          double erot, double evib, double eelec) {
+    return add_particle( id,  ispecies, icell,  x, v,
+                           erot, evib, eelec, 0.0, 0.0);
+}
+
+int Particle::add_particle(int id, int ispecies, int icell, double *x, double *v, 
+                          double erot, double evib) {
+    return add_particle( id,  ispecies, icell,  x, v,
+                           erot, evib, 0.0, 0.0, 0.0);
+}
+
+
 
 /* ----------------------------------------------------------------------
    add an empty particle to particle list, caller will fill it
@@ -814,6 +855,7 @@ void Particle::add_species(int narg, char **arg)
 
   int rotindex = 0;
   int vibindex = 0;
+  int elecindex = 0;
 
   while (iarg < narg) {
     if (strcmp(arg[iarg],"rotfile") == 0) {
@@ -829,6 +871,12 @@ void Particle::add_species(int narg, char **arg)
       if (vibindex)
         error->all(FLERR,"Species command can only use a single vibfile");
       vibindex = iarg+1;
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"elecfile") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal species command");
+      if (elecindex)
+        error->all(FLERR,"Species command can only use a single elecfile");
+      elecindex = iarg+1;
       iarg += 2;
     } else error->all(FLERR,"Illegal species command");
   }
@@ -934,6 +982,57 @@ void Particle::add_species(int narg, char **arg)
     memory->sfree(filevib);
   }
 
+  // read electronic species file and setup per-species params
+
+  if (elecindex) {
+    if (me == 0) {
+      fp = fopen(arg[elecindex],"r");
+      if (fp == NULL) {
+        char str[128];
+        sprintf(str,"Cannot open electronic file %s",arg[elecindex]);
+        error->one(FLERR,str);
+      }
+    }
+
+    nfile = maxfile = 0;
+    filerot = NULL;
+
+    if (me == 0) read_electronic_file();
+    MPI_Bcast(&nfile,1,MPI_INT,0,world);
+    if (comm->me) {
+      fileelec = (ElecFile *)
+        memory->smalloc(nfile*sizeof(ElecFile),"particle:fileelec");
+    }
+    MPI_Bcast(fileelec,nfile*sizeof(ElecFile),MPI_BYTE,0,world);
+
+    for (i = 0; i < newspecies; i++) {
+      int ii = nspecies_original + i;
+
+      for (j = 0; j < nfile; j++)
+        if (strcmp(names[i],fileelec[j].id) == 0) break;
+      if (j == nfile) {
+        if (species[ii].elecdof == 0) continue;
+        error->all(FLERR,"Species ID does not appear in electronic file");
+      }
+
+      int nmode = fileelec[j].nmode;
+      if (species[ii].nelecmode != nmode)
+        error->all(FLERR,"Mismatch between species vibdof "
+                   "and vibration file entry");
+
+      species[ii].nelecmode = nmode;
+      for (k = 0; k < nmode; k++) {
+        species[ii].electemp[k] = fileelec[j].electemp[k];
+        species[ii].elecrel[k] = fileelec[j].elecrel[k];
+        species[ii].elecdegen[k] = fileelec[j].elecdegen[k];
+      }
+
+      maxelecmode = MAX(maxelecmode,species[ii].nelecmode);
+      species[ii].elecdiscrete_read = 1;
+    }
+
+    memory->sfree(fileelec);
+  }
   // clean up
 
   delete [] names;
@@ -1034,6 +1133,10 @@ double Particle::erot(int isp, double temp_thermal, RanKnuth *erandom)
     eng = irot * update->boltz * particle->species[isp].rottemp[0];
   } else if (rotstyle == SMOOTH && species[isp].rotdof == 2) {
     eng = -log(erandom->uniform()) * update->boltz * temp_thermal;
+  
+  } else if (rotstyle == MD && species[isp].rotdof == 2) {
+ 	int irot = 0;
+	 eng = erandom->uniform(); 
   } else {
     a = 0.5*particle->species[isp].rotdof-1.0;
     while (1) {
@@ -1047,6 +1150,158 @@ double Particle::erot(int isp, double temp_thermal, RanKnuth *erandom)
 
   return eng;
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+std::tuple<double, double, double, double> Particle::evibrot(std::vector<jvData> jvdata ,std::vector<double> cumulativeProbs, int isp, int eState, double Tv, double Tr, RanKnuth *erandom){
+
+  double erot,evib,xj,xv;
+	
+  
+    std::cout << "Checking for JV Levels ! " <<std::endl;  
+  
+    int vibstyle = NONE;
+  if (collide) vibstyle = collide->vibstyle;
+  if (vibstyle != MD )
+  {
+	  return std::make_tuple(0.0,0.0,0.0,0.0);
+  }
+  else if (vibstyle == MD ){	
+	
+    //std::vector<jvData> jvdata;  
+    
+/*	  
+	  std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";	
+    std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(Tr))+"_tv-"+std::to_string(static_cast<int>(Tv))+".txt";	 	
+    
+    std::ifstream JVPFileStream(JVPFile);
+    std::ifstream JVFileStream(JVFile);
+	
+    
+	if (JVFileStream.good()) {
+		std::cout << "The file '" << JVFile  << "' exists." << std::endl;
+	//	jvdata = read_jv_levels_from_file( JVFile , eState);
+	//	std::cout << "Read " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
+	} else {
+		std::cout << "The file '"  << JVFile << "' does not exist." << std::endl;
+		jvdata = calculate_all_jv_levels("O2", 300, 70, eState);
+		std::cout << "Found " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
+		// Write to file
+		write_jv_levels_to_file(jvdata,"O2", eState);
+	}	
+
+ 		JVFileStream.close(); 
+    
+std::vector<double> cumulative_probs(jvdata.size());
+    
+    
+    if (!JVPFileStream.good()) {
+		std::cout << "The '" << JVPFile  << "' file doesnt exist." << std::endl;
+
+ 
+	double Q = calcPartitionFunction(jvdata);
+	std::vector<double> probs(jvdata.size(),0.0);
+	for (int i=0;i<jvdata.size(); i++) {
+		probs[i]=0.0;
+	}
+
+
+// STEP 1: Find unique v levels and their corresponding j=0 energies
+
+double kB = Units::KB*Units::J_TO_HARTREE	;
+
+std::map<int, double> v_energies;  // v -> energy at j=0
+for (const auto& level : jvdata) {
+    if (level.j == 0) {
+        v_energies[level.v] = level.energy;
+    }
+}
+
+
+// STEP 2: Calculate vibrational probabilities at both temperatures
+std::map<int, double> v_probs_Tv, v_probs_Tr;
+double qvib_Tv = 0.0, qvib_Tr = 0.0;
+
+for (const auto& [v, energy] : v_energies) {
+    double weight_Tv = exp(-energy / (kB * Tv));
+    double weight_Tr = exp(-energy / (kB * Tr));
+    
+    v_probs_Tv[v] = weight_Tv;
+    v_probs_Tr[v] = weight_Tr;
+    qvib_Tv += weight_Tv;
+    qvib_Tr += weight_Tr;
+}
+
+// Normalize vibrational probabilities
+for (auto& [v, prob] : v_probs_Tv) {
+    prob /= qvib_Tv;
+}
+for (auto& [v, prob] : v_probs_Tr) {
+    prob /= qvib_Tr;
+}
+
+// STEP 3: Calculate full rovibrational probabilities
+std::vector<double> jv_probs(jvdata.size());
+double psum = 0.0;
+
+for (int i = 0; i < jvdata.size(); i++) {
+    const auto& level = jvdata[i];
+    
+    double pmult = v_probs_Tv[level.v] / v_probs_Tr[level.v];
+    double rot_weight = exp(-level.energy / (kB * Tr));
+    
+    jv_probs[i] = pmult * rot_weight;
+    psum += jv_probs[i];
+}
+
+// STEP 4: Normalize all probabilities
+for (auto& prob : jv_probs) {
+    prob /= psum;
+}
+
+// STEP 5: Build cumulative probabilities for sampling
+cumulative_probs[0] = jv_probs[0];
+for (int i = 1; i < jvdata.size(); i++) {
+    cumulative_probs[i] = cumulative_probs[i-1] + jv_probs[i];
+}
+
+writeJVProbsFile(eState,Tr,Tv, cumulative_probs);
+
+}else {
+
+cumulative_probs = readJVProbsFile(eState,Tr, Tv);
+
+}
+
+cumulative_probs = readJVProbsFile(eState,Tr, Tv);
+*/
+
+// STEP 6: Sample
+double rand_val =  erandom->uniform();/* your random number 0-1 */;
+//std::cout << "SAMPLED RANDO: " << rand_val << std::endl;
+
+int selected_index = 0;
+for (int i = 0; i < cumulativeProbs.size(); i++) {
+    //std::cout << " I, CUMULATIVE PROBS: " << i << " " << cumulativeProbs[i] << std::endl;
+    if (rand_val <= cumulativeProbs[i]) {
+        selected_index = i;
+        break;
+    }
+}
+//std::cout << "SAMPLED INDEX: " << selected_index << std::endl;
+
+jvData selected_state = jvdata[selected_index];
+
+///////////////////////////////////////////////////////////////////
+    evib = (selected_state.evib-ZPE[eState])*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
+    //evib = (selected_state.evib)*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
+    erot = (selected_state.erot)*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
+    xv = static_cast<double>(selected_state.v);// random amount of energy from JV levels! Use rovibrational partition function
+    xj = static_cast<double>(selected_state.j);// random amount of energy from JV levels! Use rovibrational partition function
+  }
+  return std::make_tuple(erot,xj,evib,xv);
+
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /* ----------------------------------------------------------------------
    generate random vibrational energy for a particle
@@ -1058,6 +1313,7 @@ double Particle::erot(int isp, double temp_thermal, RanKnuth *erandom)
 double Particle::evib(int isp, double temp_thermal, RanKnuth *erandom)
 {
   double eng,a,erm,b;
+
 
   int vibstyle = NONE;
   if (collide) vibstyle = collide->vibstyle;
@@ -1085,8 +1341,69 @@ double Particle::evib(int isp, double temp_thermal, RanKnuth *erandom)
       }
       eng = erm * update->boltz * temp_thermal;
     }
-  }
+   ////////////////////////////////////////////////////////////////// 
+  } else if (vibstyle == MD && species[isp].vibdof == 1){	
+    return 0.0; //-log(erandom->uniform()) * temp_thermal / particle->species[isp].vibtemp[0];
+   
+    double state_prob = erandom->uniform(); 
 
+  }
+  return eng;
+}
+
+/* ----------------------------------------------------------------------
+   generate random electronic energy for a particle
+   only a function of species index and species properties
+   index_elecmode = index of extra per-particle electronic mode storage
+     -1 if not defined for this model, expected to always be 1
+------------------------------------------------------------------------- */
+
+double Particle::eelec(int isp,int& eState, double temp_thermal, RanKnuth *erandom)
+{
+  double eng,a,erm,b;
+
+  int elecstyle = NONE;
+  if (collide) elecstyle = collide->elecstyle;
+  if (elecstyle == NONE ) return 0.0;
+
+  // for DISCRETE, only need set eelec for elecdof = 2
+  // mode levels and eelec will be set by FixVibmode::update_custom()
+
+  eng = 0.0;
+
+  if (elecstyle == MD ) {
+	//double Q_elec = exp() 
+
+	double Qelec = 0.0;
+	std::vector<double> weights(3);
+	std::vector<double> electronic_energies{0.0,4.30*Units::EV_TO_JOULE,4.39*Units::EV_TO_JOULE};
+	double sum_weights = 0.0;
+	for (int i = 0; i < 3; i++) {
+    		weights[i] = exp(-electronic_energies[i] / (Units::KB * temp_thermal));
+    		Qelec += weights[i];
+	}
+
+	// Build cumulative probabilities
+	std::vector<double> cumprobs(3);
+	double cumsum = 0.0;
+	for (int i = 0; i < 3; i++) {
+    		cumsum += weights[i] / Qelec;
+    		cumprobs[i] = cumsum;
+	}
+
+	// Sample using random number
+	double p = erandom->uniform();
+	int selected_state = 0;
+	for (int i = 0; i < 3; i++) {
+    		if (p <= cumprobs[i]) {
+        		selected_state = i;
+        		break;
+    		}	
+	}	
+	eng = electronic_energies[selected_state];
+	eState=selected_state;
+  std::cout << "SELECTED STATE / eSTATE / energy" << selected_state << " " << eState << " " << eng  << std::endl;
+  }
   return eng;
 }
 
@@ -1102,7 +1419,7 @@ void Particle::read_species_file()
   // skip blank lines or comment lines starting with '#'
   // all other lines must have NWORDS
 
-  int NWORDS = 10;
+  int NWORDS = 13;
   char **words = new char*[NWORDS];
   char line[MAXLINE],copy[MAXLINE];
 
@@ -1137,10 +1454,13 @@ void Particle::read_species_file()
     fsp->vibdof = atoi(words[5]);
     fsp->vibrel[0] = atof(words[6]);
     fsp->vibtemp[0] = atof(words[7]);
-    fsp->specwt = atof(words[8]);
-    fsp->charge = atof(words[9]);
+    fsp->elecdof = atoi(words[8]);
+    fsp->elecrel[0] = atof(words[9]);
+    fsp->electemp[0] = atof(words[10]);
+    fsp->specwt = atof(words[11]);
+    fsp->charge = atof(words[12]);
 
-    if (fsp->rotdof > 0 || fsp->vibdof > 0) fsp->internaldof = 1;
+    if (fsp->rotdof > 0 || fsp->vibdof > 0 || fsp->elecdof > 0) fsp->internaldof = 1;
     else fsp->internaldof = 0;
 
     // error checks
@@ -1150,6 +1470,9 @@ void Particle::read_species_file()
 
     if (fsp->vibdof < 0 || fsp->vibdof > 2*MAXVIBMODE || fsp->vibdof % 2)
       error->all(FLERR,"Invalid vibrational DOF in species file");
+
+    if (fsp->elecdof < 0 || fsp->elecdof > 1 )
+      error->all(FLERR,"Invalid electronic DOF in species file");
 
     // initialize additional rotation/vibration fields
     // may be overwritten by rotfile or vibfile
@@ -1165,6 +1488,8 @@ void Particle::read_species_file()
       fsp->vibrel[m] = 0.0;
       fsp->vibdegen[m] = 0;
     }
+
+
 
     fsp->vibdiscrete_read = 0;
 
@@ -1295,6 +1620,66 @@ void Particle::read_vibration_file()
 }
 
 /* ----------------------------------------------------------------------
+   read list of extra rotation info in electronic file
+   store info in fileelec and nfile
+   only invoked by proc 0
+------------------------------------------------------------------------- */
+
+void Particle::read_electronic_file()
+{
+  // read file line by line
+  // skip blank lines or comment lines starting with '#'
+  // all other lines can have up to NWORDS
+
+  int NWORDS = 2 + 3*MAXELECMODE;
+  char **words = new char*[NWORDS];
+  char line[MAXLINE],copy[MAXLINE];
+
+  while (fgets(line,MAXLINE,fp)) {
+    int pre = strspn(line," \t\n\r");
+    if (pre == strlen(line) || line[pre] == '#') continue;
+
+    strcpy(copy,line);
+    int nwords = wordcount(copy,NULL);
+    if (nwords > NWORDS)
+      error->one(FLERR,"Incorrect line format in electronic file");
+
+    if (nfile == maxfile) {
+      maxfile += DELTASPECIES;
+      fileelec = (ElecFile *)
+        memory->srealloc(fileelec,maxfile*sizeof(ElecFile),
+                         "particle:fileelec");
+      memset(&fileelec[nfile],0,(maxfile-nfile)*sizeof(ElecFile));
+    }
+
+    nwords = wordcount(line,words);
+    ElecFile *vsp = &fileelec[nfile];
+
+    if (strlen(words[0]) + 1 > 16)
+      error->one(FLERR,"Invalid species ID in electronic file");
+    strcpy(vsp->id,words[0]);
+
+    vsp->nmode = atoi(words[1]);
+    if (vsp->nmode < 2 || vsp->nmode > MAXELECMODE)
+      error->one(FLERR,"Invalid N count in electronic file");
+    if (nwords != 2 + 3*vsp->nmode)
+      error->one(FLERR,"Incorrect line format in electronic file");
+
+    int j = 2;
+    for (int i = 0; i < vsp->nmode; i++) {
+      vsp->electemp[i] = atof(words[j++]);
+      vsp->elecrel[i] = atof(words[j++]);
+      vsp->elecdegen[i] = atoi(words[j++]);
+    }
+    nfile++;
+  }
+
+  delete [] words;
+
+  fclose(fp);
+}
+
+/* ----------------------------------------------------------------------
    count whitespace-delimited words in line
    line will be modified, since strtok() inserts NULLs
    if words is non-NULL, store ptr to each word
@@ -1347,6 +1732,9 @@ void Particle::read_restart_species(FILE *fp)
   maxvibmode = 0;
   for (int isp = 0; isp < nspecies; isp++)
     maxvibmode = MAX(maxvibmode,species[isp].nvibmode);
+  maxelecmode = 0;
+  for (int isp = 0; isp < nspecies; isp++)
+    maxelecmode = MAX(maxelecmode,species[isp].nelecmode);
 }
 
 /* ----------------------------------------------------------------------

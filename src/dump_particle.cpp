@@ -34,7 +34,7 @@ using namespace SPARTA_NS;
 
 // customize by adding keyword
 
-enum{ID,TYPE,PROC,CELLID,X,Y,Z,XS,YS,ZS,VX,VY,VZ,KE,EROT,EVIB,
+enum{ID,TYPE,PROC,CELLID,X,Y,Z,XS,YS,ZS,VX,VY,VZ,KE,EROT,EVIB,EELEC,
      CUSTOM,COMPUTE,FIX,VARIABLE};
 enum{LT,LE,GT,GE,EQ,NEQ};
 enum{INT,DOUBLE,BIGINT,STRING};        // same as Dump
@@ -485,6 +485,11 @@ int DumpParticle::count()
         ptr = dchoose;
         nstride = 1;
 
+      } else if (thresh_array[ithresh] == EELEC) {
+        for (i = 0; i < nlocal; i++) dchoose[i] = particles[i].eelec;
+        ptr = dchoose;
+        nstride = 1;
+
       } else if (thresh_array[ithresh] == CUSTOM) {
         i = nfield + ithresh;
         int index = custom[field2index[i]];
@@ -708,6 +713,9 @@ int DumpParticle::parse_fields(int narg, char **arg)
       vtype[i] = DOUBLE;
     } else if (strcmp(arg[iarg],"evib") == 0) {
       pack_choice[i] = &DumpParticle::pack_evib;
+      vtype[i] = DOUBLE;
+    } else if (strcmp(arg[iarg],"eelec") == 0) {
+      pack_choice[i] = &DumpParticle::pack_eelec;
       vtype[i] = DOUBLE;
 
     // custom particle vector or array
@@ -1019,6 +1027,7 @@ int DumpParticle::modify_param(int narg, char **arg)
     else if (strcmp(arg[1],"ke") == 0) thresh_array[nthresh] = KE;
     else if (strcmp(arg[1],"erot") == 0) thresh_array[nthresh] = EROT;
     else if (strcmp(arg[1],"evib") == 0) thresh_array[nthresh] = EVIB;
+    else if (strcmp(arg[1],"eelec") == 0) thresh_array[nthresh] = EELEC;
 
     // custom particle vector or array
     // if no trailing [], then arg is set to 0, else arg is int between []
@@ -1511,6 +1520,16 @@ void DumpParticle::pack_evib(int n)
 
   for (int i = 0; i < nchoose; i++) {
     buf[n] = particles[clist[i]].evib;
+    n += size_one;
+  }
+}
+
+void DumpParticle::pack_eelec(int n)
+{
+  Particle::OnePart *particles = particle->particles;
+
+  for (int i = 0; i < nchoose; i++) {
+    buf[n] = particles[clist[i]].eelec;
     n += size_one;
   }
 }

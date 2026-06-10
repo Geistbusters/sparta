@@ -1,0 +1,147 @@
+# pleaides: SGI-MPT, Intel
+
+SHELL = /bin/sh
+
+# ---------------------------------------------------------------------
+# compiler/linker settings
+# specify flags and libraries needed for your compiler
+
+CC =		mpiicpc
+CCFLAGS =	-O3 -axCORE-AVX512,CORE-AVX2 -xAVX -std=c++17 -Wall
+SHFLAGS =	-fPIC
+DEPFLAGS =	-M
+
+LINK =		mpiicpc
+LINKFLAGS =	-O3 -axCORE-AVX512,CORE-AVX2 -xAVX -std=c++17 -Wall
+LIB =           
+SIZE =		size
+
+ARCHIVE =	ar
+ARFLAGS =	-rcsv
+SHLIBFLAGS =	-shared
+
+# ---------------------------------------------------------------------
+# SPARTA-specific settings
+# specify settings for SPARTA features you will use
+# if you change any -D setting, do full re-compile after "make clean"
+
+# SPARTA ifdef settings, OPTIONAL
+# see possible settings in doc/Section_start.html#2_2 (step 4)
+
+SPARTA_INC =	-DSPARTA_GZIP -DSPARTA_BIGBIG -DSPARTA_MD_BUILD
+
+# MPI library, REQUIRED
+# see discussion in doc/Section_start.html#2_2 (step 5)
+# can point to dummy MPI library in src/STUBS as in Makefile.serial
+# INC = path for mpi.h, MPI compiler settings
+# PATH = path for MPI library
+# LIB = name of MPI library
+
+MPI_INC =    
+MPI_PATH = 
+MPI_LIB =
+
+# FFT library, OPTIONAL
+# see discussion in doc/Section_start.html#2_2 (step 6)
+# can be left blank to use provided KISS FFT library
+# INC = -DFFT setting, e.g. -DFFT_FFTW, FFT compiler settings
+# PATH = path for FFT library
+# LIB = name of FFT library
+
+FFT_INC =	
+FFT_PATH =  
+FFT_LIB = 
+
+# JPEG library, OPTIONAL
+# see discussion in doc/Section_start.html#2_2 (step 7)
+# only needed if -DSPARTA_JPEG listed with SPARTA_INC
+# INC = path for jpeglib.h
+# PATH = path for JPEG library
+# LIB = name of JPEG library
+
+JPG_INC =       
+JPG_PATH = 	
+JPG_LIB =	
+
+# Add after the existing library definitions
+CXX = mpiicpc 
+FC = ifort -mkl
+CXXFLAGS = -std=c++17 -Wall -g -I..
+FFLAGS = -O2 -g
+
+COLLIDE_MD_PATH = ./EG_MD/
+COLLIDE_MD_INC = -I$(COLLIDE_MD_PATH)
+
+#EXTRA_INC = $(SPARTA_FLAGS) $(MPI_INC) $(FFT_INC) $(JPG_INC) $(COLLIDE_MD_INC)
+EXTRA_INC = $(SPARTA_INC) $(MPI_INC) $(FFT_INC) $(JPG_INC) $(COLLIDE_MD_INC)
+
+# Keep the -L flags in EXTRA_PATH and EXTRA_LIB
+EXTRA_PATH = $(MPI_PATH) $(FFT_PATH) $(JPG_PATH) -L$(COLLIDE_MD_PATH)
+EXTRA_LIB = $(MPI_LIB) $(FFT_LIB) $(JPG_LIB) -mkl -lifcore
+# Ensure o3_quintet compiles before pes_wrapper
+pes_wrapper.o: o3_quintet.o
+# Make sure these get built
+EXTRA_OBJ = o3_quintet.o pes_wrapper.o 
+$(EXTRA_OBJ): | o3_quintet.o
+
+# ---------------------------------------------------------------------
+# build rules and dependencies
+# no need to edit this section
+
+EXTRA_INC = $(SPARTA_INC) $(MPI_INC) $(FFT_INC) $(JPG_INC)
+EXTRA_PATH = $(MPI_PATH) $(FFT_PATH) $(JPG_PATH)
+EXTRA_LIB = $(MPI_LIB) $(FFT_LIB) $(JPG_LIB)
+
+# Path to src files
+
+vpath %.cpp ..
+vpath %.h ..
+
+# Link target
+
+$(EXE):	$(OBJ)
+	$(LINK) $(LINKFLAGS) $(EXTRA_PATH) $(OBJ) $(EXTRA_LIB) $(LIB) -o $(EXE)
+	$(SIZE) $(EXE)
+
+# Library targets
+
+lib:	$(OBJ)
+	$(ARCHIVE) $(ARFLAGS) $(EXE) $(OBJ)
+
+shlib:	$(OBJ)
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(SHLIBFLAGS) $(EXTRA_PATH) -o $(EXE) \
+        $(OBJ) $(EXTRA_LIB) $(LIB)
+
+# Compilation rules
+
+%.o:%.cpp
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(EXTRA_INC) -c $<
+
+%.d:%.cpp
+	$(CC) $(CCFLAGS) $(EXTRA_INC) $(DEPFLAGS) $< > $@
+
+# Fortran compilation rules
+%.o:%.f90
+	$(FC) $(FFLAGS) -c $<
+
+%.o:%.f
+	$(FC) $(FFLAGS) -c $<
+
+%.o:%.F90
+	$(FC) $(FFLAGS) -c $<
+
+%.o:%.F
+	$(FC) $(FFLAGS) -c $<
+
+# Fortran dependencies (optional)
+%.d:%.f90
+        @echo "$*.o: $<" > $@
+
+%.d:%.f
+        @echo "$*.o: $<" > $@
+
+
+# Individual dependencies
+
+DEPENDS = $(OBJ:.o=.d)
+sinclude $(DEPENDS)

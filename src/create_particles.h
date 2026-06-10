@@ -32,6 +32,7 @@ class CreateParticles : protected Pointers {
   void command(int, char **);
   int evib(int);
   double erot(int);
+  double eelec(int);
 
  protected:
   int imix,single,cutflag,mspecies,twopass;

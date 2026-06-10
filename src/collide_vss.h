@@ -47,10 +47,12 @@ class CollideVSS : public Collide {
     double imass,jmass;
     double ave_rotdof;
     double ave_vibdof;
+    double ave_elecdof;
     double ave_dof;
     double etrans;
     double erot;
     double evib;
+    double eelec; 
     double eexchange;
     double eint;
     double etotal;
@@ -69,6 +71,8 @@ class CollideVSS : public Collide {
     double rotc3;
     double vibc1;
     double vibc2;
+    double elecc1;
+    double elecc2;
     double mr;
   };
 
@@ -97,6 +101,7 @@ class CollideVSS : public Collide {
   double sample_bl(RanKnuth *, double, double);
   double rotrel (int, double);
   double vibrel (int, double);
+  double elecrel (int, double);
 
   void read_param_file(char *);
   int wordparse(int, char *, char **);
@@ -134,5 +139,4 @@ Number of parameters in a line read from file is not valid.
 E: Request for unknown parameter from collide
 
 VSS model does not have the parameter being requested.
-
 */

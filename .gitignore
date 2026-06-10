@@ -12,6 +12,12 @@
 *.pyc
 __pycache__
 
+ANT/
+Storage/
+*debug.out*
+TESTS/debug.out
+*SPANT*
+
 Obj_*
 log.sparta
 log.cite

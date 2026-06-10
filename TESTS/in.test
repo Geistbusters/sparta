@@ -1,0 +1,60 @@
+################################################################################
+# thermal gas in a 0d box with collisions and simulated chemistry (not actually taking place)
+# using the TCE chemistry ("partial_energy no" as opposed to rDOF
+# particles reflect off global box boundaries
+#
+# Note:
+#  - The "comm/sort” option to the “global” command is used to match MPI runs.
+#  - The “twopass” option is used to match Kokkos runs.
+# The "comm/sort" and "twopass" options should not be used for production runs.
+################################################################################
+
+seed	    	    777
+dimension   	    3
+global              gridcut 1.0e-5 comm/sort yes
+
+boundary	    rr rr rr
+
+create_box  	    0 0.0001 0 0.0001 0 0.0001
+create_grid 	    10 10 10
+
+balance_grid        rcb part
+
+species		    air.species O2 O
+mixture		    air O2 O vstream 0.0 0.0 0.0 temp 30000.0 trot 500.00 tvib 500.00 
+mixture             air O2 frac 0.5
+mixture             air O frac 0.5
+
+global              nrho 7.07043E22
+global              fnum 7.07043E5
+
+collide		    md air air.vss
+collide_modify      rotate smooth vibrate discrete
+
+
+create_particles    air n 5000 twopass
+
+stats		    10
+compute             temp temp
+
+compute             5 thermal/grid all all temp
+compute             St reduce ave c_5[1]
+
+compute             6 grid all all tvib
+compute             Sv reduce ave c_6[1]
+
+compute             7 grid all all trot  
+compute             Sr reduce ave c_7[1] 
+
+compute		    8 count O2 O
+#compute	            nO2 reduce sum c_8[1] 
+#compute	            nO reduce sum c_8[2] 
+
+stats_style	    step cpu np nattempt ncoll nreact  c_St c_Sr c_Sv c_8[1] c_8[2] 
+
+#dump                2 image all 100 image.*.ppm type type pdiam 3.0e-6 &
+#		    size 512 512 gline yes 0.005
+#dump_modify	    2 pad 4
+
+timestep 	    7.00E-9
+run 		    2
