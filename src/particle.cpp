@@ -1152,155 +1152,165 @@ double Particle::erot(int isp, double temp_thermal, RanKnuth *erandom)
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-std::tuple<double, double, double, double> Particle::evibrot(std::vector<jvData> jvdata ,std::vector<double> cumulativeProbs, int isp, int eState, double Tv, double Tr, RanKnuth *erandom){
+
+
+
+
+//std::tuple<double, double, double, double> Particle::evibrot(std::vector<jvData> jvdata ,std::vector<double> cumulativeProbs, int isp, int eState, double Tv, double Tr, RanKnuth *erandom)
+std::tuple<double, double, double, double> Particle::evibrot(std::vector<jvData> jvdata, std::vector<double> cumulativeProbs, const std::string& species_name, int eState, double Tv, double Tr, RanKnuth *erandom) 
+{
 
   double erot,evib,xj,xv;
-	
-  
-    std::cout << "Checking for JV Levels ! " <<std::endl;  
-  
-    int vibstyle = NONE;
-  if (collide) vibstyle = collide->vibstyle;
-  if (vibstyle != MD )
-  {
-	  return std::make_tuple(0.0,0.0,0.0,0.0);
-  }
-  else if (vibstyle == MD ){	
-	
-    //std::vector<jvData> jvdata;  
-    
-/*	  
-	  std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";	
-    std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(Tr))+"_tv-"+std::to_string(static_cast<int>(Tv))+".txt";	 	
-    
-    std::ifstream JVPFileStream(JVPFile);
-    std::ifstream JVFileStream(JVFile);
-	
-    
-	if (JVFileStream.good()) {
-		std::cout << "The file '" << JVFile  << "' exists." << std::endl;
-	//	jvdata = read_jv_levels_from_file( JVFile , eState);
-	//	std::cout << "Read " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
-	} else {
-		std::cout << "The file '"  << JVFile << "' does not exist." << std::endl;
-		jvdata = calculate_all_jv_levels("O2", 300, 70, eState);
-		std::cout << "Found " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
-		// Write to file
-		write_jv_levels_to_file(jvdata,"O2", eState);
-	}	
-
- 		JVFileStream.close(); 
-    
-std::vector<double> cumulative_probs(jvdata.size());
     
     
-    if (!JVPFileStream.good()) {
-		std::cout << "The '" << JVPFile  << "' file doesnt exist." << std::endl;
-
- 
-	double Q = calcPartitionFunction(jvdata);
-	std::vector<double> probs(jvdata.size(),0.0);
-	for (int i=0;i<jvdata.size(); i++) {
-		probs[i]=0.0;
-	}
-
-
-// STEP 1: Find unique v levels and their corresponding j=0 energies
-
-double kB = Units::KB*Units::J_TO_HARTREE	;
-
-std::map<int, double> v_energies;  // v -> energy at j=0
-for (const auto& level : jvdata) {
-    if (level.j == 0) {
-        v_energies[level.v] = level.energy;
+      std::cout << "Checking for JV Levels ! " <<std::endl;  
+    
+      int vibstyle = NONE;
+    if (collide) vibstyle = collide->vibstyle;
+    if (vibstyle != MD )
+    {
+      return std::make_tuple(0.0,0.0,0.0,0.0);
     }
-}
-
-
-// STEP 2: Calculate vibrational probabilities at both temperatures
-std::map<int, double> v_probs_Tv, v_probs_Tr;
-double qvib_Tv = 0.0, qvib_Tr = 0.0;
-
-for (const auto& [v, energy] : v_energies) {
-    double weight_Tv = exp(-energy / (kB * Tv));
-    double weight_Tr = exp(-energy / (kB * Tr));
+    else if (vibstyle == MD ){	
     
-    v_probs_Tv[v] = weight_Tv;
-    v_probs_Tr[v] = weight_Tr;
-    qvib_Tv += weight_Tv;
-    qvib_Tr += weight_Tr;
-}
+      //std::vector<jvData> jvdata;  
+      
+      /*	  
+          std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";	
+          std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(Tr))+"_tv-"+std::to_string(static_cast<int>(Tv))+".txt";	 	
+          
+          std::ifstream JVPFileStream(JVPFile);
+          std::ifstream JVFileStream(JVFile);
+        
+          
+        if (JVFileStream.good()) {
+          std::cout << "The file '" << JVFile  << "' exists." << std::endl;
+        //	jvdata = read_jv_levels_from_file( JVFile , eState);
+        //	std::cout << "Read " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
+        } else {
+          std::cout << "The file '"  << JVFile << "' does not exist." << std::endl;
+          jvdata = calculate_all_jv_levels("O2", 300, 70, eState);
+          std::cout << "Found " << jvdata.size() << " J,V levels for O2 State " << std::to_string(eState) << std::endl;
+          // Write to file
+          write_jv_levels_to_file(jvdata,"O2", eState);
+        }	
 
-// Normalize vibrational probabilities
-for (auto& [v, prob] : v_probs_Tv) {
-    prob /= qvib_Tv;
-}
-for (auto& [v, prob] : v_probs_Tr) {
-    prob /= qvib_Tr;
-}
+          JVFileStream.close(); 
+          
+      std::vector<double> cumulative_probs(jvdata.size());
+          
+          
+          if (!JVPFileStream.good()) {
+          std::cout << "The '" << JVPFile  << "' file doesnt exist." << std::endl;
 
-// STEP 3: Calculate full rovibrational probabilities
-std::vector<double> jv_probs(jvdata.size());
-double psum = 0.0;
+      
+        double Q = calcPartitionFunction(jvdata);
+        std::vector<double> probs(jvdata.size(),0.0);
+        for (int i=0;i<jvdata.size(); i++) {
+          probs[i]=0.0;
+        }
 
-for (int i = 0; i < jvdata.size(); i++) {
-    const auto& level = jvdata[i];
+
+      // STEP 1: Find unique v levels and their corresponding j=0 energies
+
+      double kB = Units::KB*Units::J_TO_HARTREE	;
+
+      std::map<int, double> v_energies;  // v -> energy at j=0
+      for (const auto& level : jvdata) {
+          if (level.j == 0) {
+              v_energies[level.v] = level.energy;
+          }
+      }
+
+
+      // STEP 2: Calculate vibrational probabilities at both temperatures
+      std::map<int, double> v_probs_Tv, v_probs_Tr;
+      double qvib_Tv = 0.0, qvib_Tr = 0.0;
+
+      for (const auto& [v, energy] : v_energies) {
+          double weight_Tv = exp(-energy / (kB * Tv));
+          double weight_Tr = exp(-energy / (kB * Tr));
+          
+          v_probs_Tv[v] = weight_Tv;
+          v_probs_Tr[v] = weight_Tr;
+          qvib_Tv += weight_Tv;
+          qvib_Tr += weight_Tr;
+      }
+
+      // Normalize vibrational probabilities
+      for (auto& [v, prob] : v_probs_Tv) {
+          prob /= qvib_Tv;
+      }
+      for (auto& [v, prob] : v_probs_Tr) {
+          prob /= qvib_Tr;
+      }
+
+      // STEP 3: Calculate full rovibrational probabilities
+      std::vector<double> jv_probs(jvdata.size());
+      double psum = 0.0;
+
+      for (int i = 0; i < jvdata.size(); i++) {
+          const auto& level = jvdata[i];
+          
+          double pmult = v_probs_Tv[level.v] / v_probs_Tr[level.v];
+          double rot_weight = exp(-level.energy / (kB * Tr));
+          
+          jv_probs[i] = pmult * rot_weight;
+          psum += jv_probs[i];
+      }
+
+      // STEP 4: Normalize all probabilities
+      for (auto& prob : jv_probs) {
+          prob /= psum;
+      }
+
+      // STEP 5: Build cumulative probabilities for sampling
+      cumulative_probs[0] = jv_probs[0];
+      for (int i = 1; i < jvdata.size(); i++) {
+          cumulative_probs[i] = cumulative_probs[i-1] + jv_probs[i];
+      }
+      writeJVProbsFile(eState,Tr,Tv, cumulative_probs);
+      }else {
+      cumulative_probs = readJVProbsFile(eState,Tr, Tv);
+      }
+      cumulative_probs = readJVProbsFile(eState,Tr, Tv);
+      */
+
+      // STEP 6: Sample
+      double rand_val =  erandom->uniform();/* your random number 0-1 */;
+      //std::cout << "SAMPLED RANDO: " << rand_val << std::endl;
+
+      int selected_index = 0;
+      for (int i = 0; i < cumulativeProbs.size(); i++) {
+          //std::cout << " I, CUMULATIVE PROBS: " << i << " " << cumulativeProbs[i] << std::endl;
+          if (rand_val <= cumulativeProbs[i]) {
+              selected_index = i;
+              break;
+          }
+      }
+      //std::cout << "SAMPLED INDEX: " << selected_index << std::endl;
+
+      jvData selected_state = jvdata[selected_index];
+
     
-    double pmult = v_probs_Tv[level.v] / v_probs_Tr[level.v];
-    double rot_weight = exp(-level.energy / (kB * Tr));
-    
-    jv_probs[i] = pmult * rot_weight;
-    psum += jv_probs[i];
-}
+      double zpe = getZPE(species_name, eState);
 
-// STEP 4: Normalize all probabilities
-for (auto& prob : jv_probs) {
-    prob /= psum;
-}
-
-// STEP 5: Build cumulative probabilities for sampling
-cumulative_probs[0] = jv_probs[0];
-for (int i = 1; i < jvdata.size(); i++) {
-    cumulative_probs[i] = cumulative_probs[i-1] + jv_probs[i];
-}
-
-writeJVProbsFile(eState,Tr,Tv, cumulative_probs);
-
-}else {
-
-cumulative_probs = readJVProbsFile(eState,Tr, Tv);
-
-}
-
-cumulative_probs = readJVProbsFile(eState,Tr, Tv);
-*/
-
-// STEP 6: Sample
-double rand_val =  erandom->uniform();/* your random number 0-1 */;
-//std::cout << "SAMPLED RANDO: " << rand_val << std::endl;
-
-int selected_index = 0;
-for (int i = 0; i < cumulativeProbs.size(); i++) {
-    //std::cout << " I, CUMULATIVE PROBS: " << i << " " << cumulativeProbs[i] << std::endl;
-    if (rand_val <= cumulativeProbs[i]) {
-        selected_index = i;
-        break;
+      // 3. Calculate energies using the retrieved ZPE
+      //evib = (selected_state.evib - zpe) * Units::HARTREE_TO_J; 
+      evib = (selected_state.evib ) * Units::HARTREE_TO_J;
+      erot = (selected_state.erot) * Units::HARTREE_TO_J;
+      xv = static_cast<double>(selected_state.v);
+      xj = static_cast<double>(selected_state.j);
     }
-}
-//std::cout << "SAMPLED INDEX: " << selected_index << std::endl;
-
-jvData selected_state = jvdata[selected_index];
-
-///////////////////////////////////////////////////////////////////
-    evib = (selected_state.evib-ZPE[eState])*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
-    //evib = (selected_state.evib)*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
-    erot = (selected_state.erot)*Units::HARTREE_TO_J;// random amount of energy from JV levels! Use rovibrational partition function
-    xv = static_cast<double>(selected_state.v);// random amount of energy from JV levels! Use rovibrational partition function
-    xj = static_cast<double>(selected_state.j);// random amount of energy from JV levels! Use rovibrational partition function
-  }
-  return std::make_tuple(erot,xj,evib,xv);
+    
+  return std::make_tuple(erot, xj, evib, xv);
 
 }
+
+
+
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /* ----------------------------------------------------------------------

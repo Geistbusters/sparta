@@ -185,7 +185,9 @@ class Particle : protected Pointers {
   double evib(int, double, class RanKnuth *);
   double eelec(int,int&, double, class RanKnuth *);
   // ECG ADDS
-  std::tuple<double, double, double, double> evibrot(std::vector<jvData> jvdata, std::vector<double> cprobs,int isp, int eState, double Tv, double Tr, RanKnuth *erandom);
+  //std::tuple<double, double, double, double> evibrot(std::vector<jvData> jvdata, std::vector<double> cprobs,int isp, int eState, double Tv, double Tr, RanKnuth *erandom);
+  std::tuple<double, double, double, double> evibrot(std::vector<jvData> jvdata, std::vector<double> cumulativeProbs, const std::string& species_name, int eState, double Tv, double Tr, RanKnuth *erandom);
+
 
 
   void write_restart_species(FILE *fp);

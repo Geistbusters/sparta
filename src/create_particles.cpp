@@ -371,8 +371,10 @@ void CreateParticles::command(int narg, char **arg)
    find cell it is in, and store on appropriate processor
 ------------------------------------------------------------------------- */
 
-void CreateParticles::create_single()
-{
+void CreateParticles::create_single(){
+  
+  if (comm->me == 0)
+    if (screen) fprintf(screen,"Creating single particle ...\n");
   np = 1;
 
   double x[3],v[3],vstream[3];
@@ -389,102 +391,128 @@ void CreateParticles::create_single()
   std::cout << " IN CREATE SINGLE PART Te,Tv,Tr" << temp_elec << " " <<temp_vib << " " << temp_rot << std::endl; 
  
 
-//int eState;
+  //int eState;
 
 
-/*
-  std::vector<double> cprobs;
-cprobs = readJVProbsFile(0,temp_rot, temp_vib);
-std::vector<jvData> jvdata;
-std::string JVFile = "JV_levels_O2-0.txt";	
-jvdata = read_jv_levels_from_file( JVFile );
-*/
+    /*
+      std::vector<double> cprobs;
+    cprobs = readJVProbsFile(0,temp_rot, temp_vib);
+    std::vector<jvData> jvdata;
+    std::string JVFile = "JV_levels_O2-0.txt";	
+    jvdata = read_jv_levels_from_file( JVFile );
+    */
+      
+    
+    
+    
+    vstream[0] = vstream[1] = vstream[2] = 0.0;
+
+    if (domain->dimension == 2 && x[2] != 0.0)
+      error->all(FLERR,"Create_particles single requires z = 0 "
+                "for 2d simulation");
+
+    Grid::ChildCell *cells = grid->cells;
+    Grid::ChildInfo *cinfo = grid->cinfo;
+    int nglocal = grid->nlocal;
+
+    int iwhich = -1;
+    for (int icell = 0; icell < nglocal; icell++) {
+      if (cinfo[icell].type != OUTSIDE) continue;
+      lo = cells[icell].lo;
+      hi = cells[icell].hi;
+      if (x[0] >= lo[0] && x[0] < hi[0] &&
+          x[1] >= lo[1] && x[1] < hi[1] &&
+          x[2] >= lo[2] && x[2] < hi[2]) iwhich = icell;
+    }
+
+    // insure that exactly one proc found cell to insert particle into
+
+    int flag,flagall;
+    if (iwhich < 0) flag = 0;
+    else flag = 1;
+    MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);
+    if (flagall != 1)
+      error->all(FLERR,"Could not create a single particle");
+
+    // nfix_update_custom = # of fixes with update_custom() method
+
+    particle->error_custom();
+    modify->list_init_fixes();
+    int nfix_update_custom = modify->n_update_custom;
+
+    // add the particle
+
+    RanKnuth *random = new RanKnuth(update->ranmaster->uniform());
+
+    if (iwhich >= 0) {
+
+      int id = MAXSMALLINT*random->uniform();
+      int eState=0;
+      double eelec = particle->eelec(mspecies, eState, temp_elec,random);
+      eState = getEState(eelec,random->uniform());
+      std::cout <<" ESTATE IN CREATE SINGLE IS " << eState << std::endl;
+
+      double erot = 0.0;
+      double evib = 0.0;
+      double xj = 0.0;
+      double xv = 0.0;
+
+
   
-  
-  
-  
-  vstream[0] = vstream[1] = vstream[2] = 0.0;
 
-  if (domain->dimension == 2 && x[2] != 0.0)
-    error->all(FLERR,"Create_particles single requires z = 0 "
-               "for 2d simulation");
+      std::string species_name = particle->species[mspecies].id; 
 
-  Grid::ChildCell *cells = grid->cells;
-  Grid::ChildInfo *cinfo = grid->cinfo;
-  int nglocal = grid->nlocal;
+      if (species_name.length() >= 2) {
+  
+        std::vector<double> cprobs;
+        std::vector<jvData> jvdata;
 
-  int iwhich = -1;
-  for (int icell = 0; icell < nglocal; icell++) {
-    if (cinfo[icell].type != OUTSIDE) continue;
-    lo = cells[icell].lo;
-    hi = cells[icell].hi;
-    if (x[0] >= lo[0] && x[0] < hi[0] &&
-        x[1] >= lo[1] && x[1] < hi[1] &&
-        x[2] >= lo[2] && x[2] < hi[2]) iwhich = icell;
+        //std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+        std::string JVFile = "JV_levels_"+species_name+"-"+std::to_string(eState)+".txt";
+        std::cout << "Looking for File " << JVFile << std::endl;
+        // Check if the file exists first!
+        std::ifstream testFile(JVFile);
+        if (testFile.good()) {
+          testFile.close();
+          jvdata = read_jv_levels_from_file(JVFile);
+        } else {
+          std::cout << "File " << JVFile << " missing! Generating on the fly..." << std::endl;
+          // Generate it on the fly (adjust the arguments to match your actual function signature)
+          jvdata = calculate_all_jv_levels(species_name, 300, 70, eState);
+          write_jv_levels_to_file(jvdata, species_name.c_str(), eState);
+        }
+        //jvdata = read_jv_levels_from_file( JVFile );
+
+        //std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+        std::string JVPFile = "JV_probs_"+species_name+"-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+
+        std::ifstream JVPFileStream(JVPFile);
+
+        if (JVPFileStream.good()) {
+                cprobs = readJVProbsFile(species_name, eState, temp_rot, temp_vib);
+        }else{
+                cprobs = genCumulProb( species_name, jvdata, eState, temp_rot, temp_vib);
+        }
+        JVPFileStream.close();
+
+          //int eState = getEState(eelec,random->uniform());
+          auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs,species_name,eState,temp_vib,temp_rot,random);
+
+          std::cout << "SAMPLED EROT EVIB XJ XV : " << erot << " " << evib << " " << xj << " " << xv << std::endl;
+          //double erot = particle->erot(mspecies,temp_rot,random,eState);
+      }
+        
+        particle->add_particle(id,mspecies,iwhich,x,v,erot,evib,eelec,xj,xv);
+
+        if (nfix_update_custom){
+            modify->update_custom(particle->nlocal-1,temp_thermal,
+                                temp_rot,temp_vib,temp_elec,vstream);
+        }
+    }
+
+    delete random;
+
   }
-
-  // insure that exactly one proc found cell to insert particle into
-
-  int flag,flagall;
-  if (iwhich < 0) flag = 0;
-  else flag = 1;
-  MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);
-  if (flagall != 1)
-    error->all(FLERR,"Could not create a single particle");
-
-  // nfix_update_custom = # of fixes with update_custom() method
-
-  particle->error_custom();
-  modify->list_init_fixes();
-  int nfix_update_custom = modify->n_update_custom;
-
-  // add the particle
-
-  RanKnuth *random = new RanKnuth(update->ranmaster->uniform());
-
-  if (iwhich >= 0) {
-    int id = MAXSMALLINT*random->uniform();
-    int eState;
-    double eelec = particle->eelec(mspecies,eState, temp_elec,random);
-	std::cout <<" ESTATE IS " << eState << std::endl;
-
-
-std::vector<double> cprobs;
-std::vector<jvData> jvdata;
-
-std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
-jvdata = read_jv_levels_from_file( JVFile );
-
-std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
-std::ifstream JVPFileStream(JVPFile);
-
-if (JVPFileStream.good()) {
-        cprobs = readJVProbsFile(0,temp_rot, temp_vib);
-}else{
-        cprobs = genCumulProb( jvdata,eState , temp_rot, temp_vib);
-}
-JVPFileStream.close();
-
-
-
-
-
-
-
-
-    //int eState = getEState(eelec,random->uniform());
-    auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs,mspecies,eState,temp_vib,temp_rot,random);
-
-    std::cout << "SAMPLED EROT EVIB XJ XV : " << erot << " " << evib << " " << xj << " " << xv << std::endl;
-    //double erot = particle->erot(mspecies,temp_rot,random,eState);
-    particle->add_particle(id,mspecies,iwhich,x,v,erot,evib,eelec,xj,xv);
-    if (nfix_update_custom)
-      modify->update_custom(particle->nlocal-1,temp_thermal,
-                           temp_rot,temp_vib,temp_elec,vstream);
-  }
-
-  delete random;
-}
 
 /* ----------------------------------------------------------------------
    create particles in parallel
@@ -494,304 +522,392 @@ JVPFileStream.close();
    attributes of created particle depend on number of procs
 ------------------------------------------------------------------------- */
 
-void CreateParticles::create_local()
-{
-  int dimension = domain->dimension;
+void CreateParticles::create_local(){
+  if (comm->me == 0)
+    if (screen) fprintf(screen,"Creating local particles ...\n");
+    int dimension = domain->dimension;
 
-  int me = comm->me;
-  RanKnuth *random = new RanKnuth(update->ranmaster->uniform());
-  double seed = update->ranmaster->uniform();
-  random->reset(seed,me,100);
+    int me = comm->me;
+    RanKnuth *random = new RanKnuth(update->ranmaster->uniform());
+    double seed = update->ranmaster->uniform();
+    random->reset(seed,me,100);
 
-  Grid::ChildCell *cells = grid->cells;
-  Grid::ChildInfo *cinfo = grid->cinfo;
-  Grid::SplitInfo *sinfo = grid->sinfo;
-  int nglocal = grid->nlocal;
+    Grid::ChildCell *cells = grid->cells;
+    Grid::ChildInfo *cinfo = grid->cinfo;
+    Grid::SplitInfo *sinfo = grid->sinfo;
+    int nglocal = grid->nlocal;
 
-  // flowvol = total weighted flow volume of all cells
-  //   skip cells inside surfs and split cells
-  //   skip cells outside defined region
-  // insertvol = subset of flowvol for cells eligible for insertion
-  //   insertvol = flowvol if cutflag = 1
-  //   insertvol < flowvol possible if cutflag = 0 (no cut cells)
+    // flowvol = total weighted flow volume of all cells
+    //   skip cells inside surfs and split cells
+    //   skip cells outside defined region
+    // insertvol = subset of flowvol for cells eligible for insertion
+    //   insertvol = flowvol if cutflag = 1
+    //   insertvol < flowvol possible if cutflag = 0 (no cut cells)
 
-  double flowvolme = 0.0;
-  double insertvolme = 0.0;
+    double flowvolme = 0.0;
+    double insertvolme = 0.0;
 
-  for (int icell = 0; icell < nglocal; icell++) {
-    if (cinfo[icell].type == INSIDE) continue;
-    if (cells[icell].nsplit > 1) continue;
-    if (region && region->bboxflag &&
-        outside_region(dimension,cells[icell].lo,cells[icell].hi))
-      continue;
+    for (int icell = 0; icell < nglocal; icell++) {
+      if (cinfo[icell].type == INSIDE) continue;
+      if (cells[icell].nsplit > 1) continue;
+      if (region && region->bboxflag &&
+          outside_region(dimension,cells[icell].lo,cells[icell].hi))
+        continue;
 
-    flowvolme += cinfo[icell].volume / cinfo[icell].weight;
-    if (!cutflag && cells[icell].nsurf) continue;
-    insertvolme += cinfo[icell].volume / cinfo[icell].weight;
-  }
-
-  // calculate total Np if not set explicitly
-  // based on total flowvol and mixture density
-
-  if (np == 0) {
-    double flowvol;
-    MPI_Allreduce(&flowvolme,&flowvol,1,MPI_DOUBLE,MPI_SUM,world);
-    np = particle->mixture[imix]->nrho * flowvol / update->fnum;
-  }
-
-  // gather cummulative insertion volumes across all procs
-
-  double volupto;
-  MPI_Scan(&insertvolme,&volupto,1,MPI_DOUBLE,MPI_SUM,world);
-
-  double *vols;
-  int nprocs = comm->nprocs;
-  memory->create(vols,nprocs,"create_particles:vols");
-  MPI_Allgather(&volupto,1,MPI_DOUBLE,vols,1,MPI_DOUBLE,world);
-
-  // gathered Scan results not guaranteed to be monotonically increasing
-  //   can cause epsilon mis-counts for huge particle counts
-  //   so enforce monotonic increase by brute force
-
-  for (int i = 1; i < nprocs; i++)
-    if (vols[i] != vols[i-1] &&
-        fabs(vols[i]-vols[i-1])/vols[nprocs-1] < EPSZERO)
-      vols[i] = vols[i-1];
-
-  // nme = # of particles for me to create
-  // based on fraction of insertvol I own
-  // loop over procs insures sum of nme = Np
-
-  bigint nstart,nstop;
-  if (me > 0) nstart = static_cast<bigint> (np * (vols[me-1]/vols[nprocs-1]));
-  else nstart = 0;
-  nstop = static_cast<bigint> (np * (vols[me]/vols[nprocs-1]));
-  bigint nme = nstop-nstart;
-
-  memory->destroy(vols);
-
-  // nfix_update_custom = # of fixes with update_custom() method
-
-  particle->error_custom();
-  modify->list_init_fixes();
-  int nfix_update_custom = modify->n_update_custom;
-
-  // loop over cells I own
-  // only add particles to cells eligible for insertion
-  // ntarget = floating point # of particles to create in one cell
-  // npercell = integer # of particles to create in one cell
-  // basing ntarget on accumulated volume and nprev insures Nme total creations
-  // particle species = random value based on mixture fractions
-  // particle velocity = stream velocity + thermal velocity
-
-  int *species = particle->mixture[imix]->species;
-  double *cummulative = particle->mixture[imix]->cummulative;
-  double *vstream = particle->mixture[imix]->vstream;
-  double *vscale = particle->mixture[imix]->vscale;
-  int nspecies = particle->mixture[imix]->nspecies;
-  double temp_thermal = particle->mixture[imix]->temp_thermal;
-  double temp_rot = particle->mixture[imix]->temp_rot;
-  double temp_vib = particle->mixture[imix]->temp_vib;
-  double temp_elec = particle->mixture[imix]->temp_elec;
-
-  int npercell,ncreate,isp,ispecies,id,pflag,subcell;
-  double x[3],v[3],xcell[3],vstream_variable[3];
-  double ntarget,scale,rn,vn,vr,theta1,theta2,erot,xj,evib,xv,eelec;
-  double *lo,*hi;
-
-  double tempscale = 1.0;
-  double sqrttempscale = 1.0;
-
-  double volsum = 0.0;
-  bigint nprev = 0;
-////////////
-
-
-int eState=0;
-int prevEState;
-
-std::vector<double> cprobs;
-std::vector<jvData> jvdata;
-std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";	
-
-//std::string JVFile = "JV_levels_O2-0.txt";	
-
-jvdata = read_jv_levels_from_file( JVFile);
-
-std::cout << std::to_string(static_cast<int>(temp_rot)) <<"   " << std::to_string(static_cast<int>(temp_vib)) << std::endl;
-std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";	 	
-
-std::ifstream JVPFileStream(JVPFile);
-
-std::cout << " ESTATE " << eState << std::endl;
-
-std::cout << " looking for " << JVPFile << std::endl;
-if (JVPFileStream.good()) {
-	std::cout << "Found " << JVPFile << std::endl;
-	cprobs = readJVProbsFile(0,temp_rot, temp_vib);
-}else{
-	std::cout << "Didnt Find " << JVPFile << std::endl;
-	cprobs = genCumulProb(jvdata,eState,temp_rot, temp_vib);
-}
-JVPFileStream.close();
-prevEState= eState;
-
-////////////
-  for (int icell = 0; icell < nglocal; icell++) {
-    if (cinfo[icell].type == INSIDE) continue;
-    if (cells[icell].nsplit > 1) continue;
-    if (cinfo[icell].volume == 0.0) continue;
-    if (region && region->bboxflag &&
-        outside_region(dimension,cells[icell].lo,cells[icell].hi))
-      continue;
-    if (!cutflag && cells[icell].nsurf) continue;
-
-    volsum += cinfo[icell].volume / cinfo[icell].weight;
-
-    ntarget = nme * volsum/insertvolme - nprev;
-    npercell = static_cast<int> (ntarget);
-
-    if (random->uniform() < ntarget-npercell) npercell++;
-    ncreate = npercell;
-
-    lo = cells[icell].lo;
-    hi = cells[icell].hi;
-
-    if (densflag) {
-      scale = density_variable(lo,hi);
-      ntarget *= scale;
-      ncreate = static_cast<int> (ntarget);
-      if (random->uniform() < ntarget-ncreate) ncreate++;
+      flowvolme += cinfo[icell].volume / cinfo[icell].weight;
+      if (!cutflag && cells[icell].nsurf) continue;
+      insertvolme += cinfo[icell].volume / cinfo[icell].weight;
     }
 
-    // if surfs in cell, use xcell for all created particle attempts
+    // calculate total Np if not set explicitly
+    // based on total flowvol and mixture density
 
-    if (cells[icell].nsurf)
-      pflag = grid->point_outside_surfs(icell,xcell);
+    if (np == 0) {
+      double flowvol;
+      MPI_Allreduce(&flowvolme,&flowvol,1,MPI_DOUBLE,MPI_SUM,world);
+      np = particle->mixture[imix]->nrho * flowvol / update->fnum;
+    }
 
-    for (int m = 0; m < ncreate; m++) {
+    // gather cummulative insertion volumes across all procs
 
-      // generate random position X for new particle
+    double volupto;
+    MPI_Scan(&insertvolme,&volupto,1,MPI_DOUBLE,MPI_SUM,world);
 
-      x[0] = lo[0] + random->uniform() * (hi[0]-lo[0]);
-      x[1] = lo[1] + random->uniform() * (hi[1]-lo[1]);
-      x[2] = lo[2] + random->uniform() * (hi[2]-lo[2]);
-      if (dimension == 2) x[2] = 0.0;
+    double *vols;
+    int nprocs = comm->nprocs;
+    memory->create(vols,nprocs,"create_particles:vols");
+    MPI_Allgather(&volupto,1,MPI_DOUBLE,vols,1,MPI_DOUBLE,world);
 
-      // if surfs, check if random position is in flow region
-      // if subcell, also check if in correct subcell
-      // if not, attempt new insertion up to MAXATTEMPT times
+    // gathered Scan results not guaranteed to be monotonically increasing
+    //   can cause epsilon mis-counts for huge particle counts
+    //   so enforce monotonic increase by brute force
 
-      if (cells[icell].nsurf && pflag) {
-        int nattempt = 0;
-        while (nattempt < MAXATTEMPT) {
-          if (grid->outside_surfs(icell,x,xcell)) {
-            if (cells[icell].nsplit == 1) break;
-            int splitcell = sinfo[cells[icell].isplit].icell;
-            if (dimension == 2) subcell = update->split2d(splitcell,x);
-            else subcell = update->split3d(splitcell,x);
-            if (subcell == icell) break;
+    for (int i = 1; i < nprocs; i++)
+      if (vols[i] != vols[i-1] &&
+          fabs(vols[i]-vols[i-1])/vols[nprocs-1] < EPSZERO)
+        vols[i] = vols[i-1];
+
+    // nme = # of particles for me to create
+    // based on fraction of insertvol I own
+    // loop over procs insures sum of nme = Np
+
+    bigint nstart,nstop;
+    if (me > 0) nstart = static_cast<bigint> (np * (vols[me-1]/vols[nprocs-1]));
+    else nstart = 0;
+    nstop = static_cast<bigint> (np * (vols[me]/vols[nprocs-1]));
+    bigint nme = nstop-nstart;
+
+    memory->destroy(vols);
+
+    // nfix_update_custom = # of fixes with update_custom() method
+
+    particle->error_custom();
+    modify->list_init_fixes();
+    int nfix_update_custom = modify->n_update_custom;
+
+    // loop over cells I own
+    // only add particles to cells eligible for insertion
+    // ntarget = floating point # of particles to create in one cell
+    // npercell = integer # of particles to create in one cell
+    // basing ntarget on accumulated volume and nprev insures Nme total creations
+    // particle species = random value based on mixture fractions
+    // particle velocity = stream velocity + thermal velocity
+
+    int *species = particle->mixture[imix]->species;
+    double *cummulative = particle->mixture[imix]->cummulative;
+    double *vstream = particle->mixture[imix]->vstream;
+    double *vscale = particle->mixture[imix]->vscale;
+    int nspecies = particle->mixture[imix]->nspecies;
+    double temp_thermal = particle->mixture[imix]->temp_thermal;
+    double temp_rot = particle->mixture[imix]->temp_rot;
+    double temp_vib = particle->mixture[imix]->temp_vib;
+    double temp_elec = particle->mixture[imix]->temp_elec;
+
+    int npercell,ncreate,isp,ispecies,id,pflag,subcell;
+    double x[3],v[3],xcell[3],vstream_variable[3];
+    double ntarget,scale,rn,vn,vr,theta1,theta2,erot,xj,evib,xv,eelec;
+    double *lo,*hi;
+
+    double tempscale = 1.0;
+    double sqrttempscale = 1.0;
+
+    // double volsum = 0.0;
+    // bigint nprev = 0;
+
+
+    // int eState=0;
+    // int prevEState;
+
+    // std::vector<double> cprobs;
+    // std::vector<jvData> jvdata;
+    // std::string species_name = particle->species[mspecies].id; 
+
+    // if (species_name.length() >= 2) {
+
+    //   //std::vector<double> cprobs;
+    //   //std::vector<jvData> jvdata;
+
+    //   //std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+    //   std::string JVFile = "JV_levels_"+species_name+"-"+std::to_string(eState)+".txt";
+    //   jvdata = read_jv_levels_from_file( JVFile );
+
+    //   //std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+    //   std::string JVPFile = "JV_probs_"+species_name+"-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+
+    //   std::ifstream JVPFileStream(JVPFile);
+
+    //   if (JVPFileStream.good()) {
+    //           cprobs = readJVProbsFile(species_name, eState, temp_rot, temp_vib);
+    //   }else{
+    //           cprobs = genCumulProb( species_name, jvdata, eState, temp_rot, temp_vib);
+    //   }
+    //   JVPFileStream.close();
+
+    //     //int eState = getEState(eelec,random->uniform());
+    //     auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs,mspecies,eState,temp_vib,temp_rot,random);
+
+    //     std::cout << "SAMPLED EROT EVIB XJ XV : " << erot << " " << evib << " " << xj << " " << xv << std::endl;
+    //     //double erot = particle->erot(mspecies,temp_rot,random,eState);
+    // }
+
+    // prevEState= eState;
+
+    double volsum = 0.0;
+    bigint nprev = 0;
+
+    // --- CACHING VARIABLES ---
+    int prevEState = -1;
+    int prevSpecies = -1;
+    std::vector<double> cprobs;
+    std::vector<jvData> jvdata;
+    // -------------------------
+
+
+    for (int icell = 0; icell < nglocal; icell++) {
+      if (cinfo[icell].type == INSIDE) continue;
+      if (cells[icell].nsplit > 1) continue;
+      if (cinfo[icell].volume == 0.0) continue;
+      if (region && region->bboxflag &&
+          outside_region(dimension,cells[icell].lo,cells[icell].hi))
+        continue;
+      if (!cutflag && cells[icell].nsurf) continue;
+
+      volsum += cinfo[icell].volume / cinfo[icell].weight;
+
+      ntarget = nme * volsum/insertvolme - nprev;
+      npercell = static_cast<int> (ntarget);
+
+      if (random->uniform() < ntarget-npercell) npercell++;
+      ncreate = npercell;
+
+      lo = cells[icell].lo;
+      hi = cells[icell].hi;
+
+      if (densflag) {
+        scale = density_variable(lo,hi);
+        ntarget *= scale;
+        ncreate = static_cast<int> (ntarget);
+        if (random->uniform() < ntarget-ncreate) ncreate++;
+      }
+
+      // if surfs in cell, use xcell for all created particle attempts
+
+      if (cells[icell].nsurf)
+        pflag = grid->point_outside_surfs(icell,xcell);
+
+      for (int m = 0; m < ncreate; m++) {
+
+        // generate random position X for new particle
+
+        x[0] = lo[0] + random->uniform() * (hi[0]-lo[0]);
+        x[1] = lo[1] + random->uniform() * (hi[1]-lo[1]);
+        x[2] = lo[2] + random->uniform() * (hi[2]-lo[2]);
+        if (dimension == 2) x[2] = 0.0;
+
+        // if surfs, check if random position is in flow region
+        // if subcell, also check if in correct subcell
+        // if not, attempt new insertion up to MAXATTEMPT times
+
+        if (cells[icell].nsurf && pflag) {
+          int nattempt = 0;
+          while (nattempt < MAXATTEMPT) {
+            if (grid->outside_surfs(icell,x,xcell)) {
+              if (cells[icell].nsplit == 1) break;
+              int splitcell = sinfo[cells[icell].isplit].icell;
+              if (dimension == 2) subcell = update->split2d(splitcell,x);
+              else subcell = update->split3d(splitcell,x);
+              if (subcell == icell) break;
+            }
+
+            nattempt++;
+
+            x[0] = lo[0] + random->uniform() * (hi[0]-lo[0]);
+            x[1] = lo[1] + random->uniform() * (hi[1]-lo[1]);
+            x[2] = lo[2] + random->uniform() * (hi[2]-lo[2]);
+            if (dimension == 2) x[2] = 0.0;
           }
 
-          nattempt++;
+          // particle insertion was unsuccessful
 
-          x[0] = lo[0] + random->uniform() * (hi[0]-lo[0]);
-          x[1] = lo[1] + random->uniform() * (hi[1]-lo[1]);
-          x[2] = lo[2] + random->uniform() * (hi[2]-lo[2]);
-          if (dimension == 2) x[2] = 0.0;
+          if (nattempt >= MAXATTEMPT) continue;
         }
 
-        // particle insertion was unsuccessful
+        // if region defined, skip if particle outside region
 
-        if (nattempt >= MAXATTEMPT) continue;
-      }
+        if (region && !region->match(x)) continue;
 
-      // if region defined, skip if particle outside region
+        // insertion of particle at position X is accepted
+        // calculate all other particle properties
 
-      if (region && !region->match(x)) continue;
+        rn = random->uniform();
 
-      // insertion of particle at position X is accepted
-      // calculate all other particle properties
-
-      rn = random->uniform();
-
-      isp = 0;
-      while (cummulative[isp] < rn) isp++;
-      ispecies = species[isp];
-
-      if (speciesflag) {
-        isp = species_variable(x) - 1;
-        if (isp < 0 || isp >= nspecies) continue;
+        isp = 0;
+        while (cummulative[isp] < rn) isp++;
         ispecies = species[isp];
-      }
 
-      if (tempflag) {
-        tempscale = temperature_variable(x);
-        sqrttempscale = sqrt(tempscale);
-      }
+        if (speciesflag) {
+          isp = species_variable(x) - 1;
+          if (isp < 0 || isp >= nspecies) continue;
+          ispecies = species[isp];
+        }
 
-      vn = vscale[isp] * sqrttempscale * sqrt(-log(random->uniform()));
-      vr = vscale[isp] * sqrttempscale * sqrt(-log(random->uniform()));
-      theta1 = MY_2PI * random->uniform();
-      theta2 = MY_2PI * random->uniform();
+        if (tempflag) {
+          tempscale = temperature_variable(x);
+          sqrttempscale = sqrt(tempscale);
+        }
 
-      if (velflag) {
-        velocity_variable(x,vstream,vstream_variable);
-        v[0] = vstream_variable[0] + vn*cos(theta1);
-        v[1] = vstream_variable[1] + vr*cos(theta2);
-        v[2] = vstream_variable[2] + vr*sin(theta2);
-      } else {
-        v[0] = vstream[0] + vn*cos(theta1);
-        v[1] = vstream[1] + vr*cos(theta2);
-        v[2] = vstream[2] + vr*sin(theta2);
-      }
+        vn = vscale[isp] * sqrttempscale * sqrt(-log(random->uniform()));
+        vr = vscale[isp] * sqrttempscale * sqrt(-log(random->uniform()));
+        theta1 = MY_2PI * random->uniform();
+        theta2 = MY_2PI * random->uniform();
 
-      /*
-      erot = particle->erot(ispecies,temp_rot*tempscale,random);
-      evib = particle->evib(ispecies,temp_vib*tempscale, ,random);
-       eelec = particle->eelec(ispecies,temp_elec*tempscale,random);
-       */
+        if (velflag) {
+          velocity_variable(x,vstream,vstream_variable);
+          v[0] = vstream_variable[0] + vn*cos(theta1);
+          v[1] = vstream_variable[1] + vr*cos(theta2);
+          v[2] = vstream_variable[2] + vr*sin(theta2);
+        } else {
+          v[0] = vstream[0] + vn*cos(theta1);
+          v[1] = vstream[1] + vr*cos(theta2);
+          v[2] = vstream[2] + vr*sin(theta2);
+        }
 
-  std::cout << " IN CRATE PARTS Te,Tv,Tr, TScale" << temp_elec << " " <<temp_vib << " " << temp_rot << " " << tempscale << std::endl; 
-      eelec = particle->eelec(ispecies,eState, temp_elec*tempscale,random);
-      //int eState = getEState(eelec,random->uniform());
-	std::cout <<" ESTATE IS " << eState << std::endl;
+        /*
+        erot = particle->erot(ispecies,temp_rot*tempscale,random);
+        evib = particle->evib(ispecies,temp_vib*tempscale, ,random);
+        eelec = particle->eelec(ispecies,temp_elec*tempscale,random);
+        */
 
-if(eState != prevEState){	
-	std::cout <<" WHICH IS  NEW! LOOKING FOR JV DATA..." << eState << std::endl;
-	std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
-	jvdata = read_jv_levels_from_file( JVFile );
+        std::cout << " IN CREATE PARTS Te, Tv, Tr, TScale " << temp_elec << " " <<temp_vib << " " << temp_rot << " " << tempscale << std::endl; 
+        
+        // 1. Initialize default atomic values
+        double erot = 0.0, evib = 0.0, xj = 0.0, xv = 0.0;
+        int eState = 0;
+        
+        eelec = particle->eelec(ispecies,eState, temp_elec*tempscale,random);
+        eState = getEState(eelec,random->uniform());
+        std::cout <<" ESTATE IN CREATE_LOCAL IS " << eState << std::endl;
 
-	std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
-	std::ifstream JVPFileStream(JVPFile);
+        std::string species_name = particle->species[ispecies].id;
+        if (species_name.length() >= 2) {
 
-	if (JVPFileStream.good()) {
-        	cprobs = readJVProbsFile(eState,temp_rot, temp_vib);
-	}else{
-        	cprobs = genCumulProb(jvdata,eState, temp_rot, temp_vib);
-	}
-	JVPFileStream.close();
-    }
-prevEState = eState;
+          if (eState != prevEState || ispecies != prevSpecies) {	
+            std::cout <<" NEW SPECIES OR ESTATE! LOOKING FOR JV DATA..." << eState << std::endl;
 
-      auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs, ispecies,eState, temp_vib*tempscale,temp_rot*tempscale,random);
-     
-      id = MAXSMALLINT*random->uniform();
+            std::string JVFile = "JV_levels_"+species_name+"-"+std::to_string(eState)+".txt";
+            std::cout << "Looking for File " << JVFile << std::endl;
+            // Check if the file exists first!
+            std::ifstream JVFileStream(JVFile);
+            if (JVFileStream.good()) {
+                //testFile.close();
+                jvdata = read_jv_levels_from_file(JVFile);
+            } else {
+                std::cout << "File " << JVFile << " missing! Generating on the fly..." << std::endl;
+                // Generate it on the fly (adjust the arguments to match your actual function signature)
+                jvdata = calculate_all_jv_levels(species_name, 300, 70, eState);
+                write_jv_levels_to_file(jvdata, species_name.c_str(), eState);
+            }
+            JVFileStream.close();
 
-      particle->add_particle(id,ispecies,icell,x,v,erot,evib,eelec,xj,xv);
 
-      if (nfix_update_custom)
+
+            std::string JVPFile = "JV_probs_"+species_name+"-"+std::to_string(eState)+
+            "_tr-"+std::to_string(static_cast<int>(temp_rot))+
+            "_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+            std::cout << "Looking for File " << JVPFile << std::endl;
+            std::ifstream JVPFileStream(JVPFile);
+            if (JVPFileStream.good()) {
+                  cprobs = readJVProbsFile(species_name, eState, temp_rot, temp_vib);
+            }else{
+                     //std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+                  cprobs = genCumulProb( species_name, jvdata, eState, temp_rot, temp_vib);
+            }
+            JVPFileStream.close();
+
+
+           
+            //jvdata = read_jv_levels_from_file( JVFile );
+
+            //std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+           
+
+            
+
+            // Update cache trackers
+            prevEState = eState;
+            prevSpecies = ispecies;
+          }
+          
+          //int eState = getEState(eelec,random->uniform());
+          auto [erot_sample,xj_sample,evib_sample,xv_sample] = particle->evibrot(jvdata,cprobs,species_name,eState,temp_vib,temp_rot,random);
+
+          std::cout << "SAMPLED EROT EVIB XJ XV : " << erot_sample << " " 
+          << evib_sample << " " << xv_sample << " " << xv_sample << std::endl;
+          //double erot = particle->erot(mspecies,temp_rot,random,eState);
+
+          erot = erot_sample;
+          evib = evib_sample;
+          xj = xj_sample;
+          xv = xv_sample;
+
+        }
+
+
+        // if(eState != prevEState){	
+        //   std::cout <<" WHICH IS  NEW! LOOKING FOR JV DATA..." << eState << std::endl;
+        //   std::string JVFile = "JV_levels_O2-"+std::to_string(eState)+".txt";
+        //   std::vector<jvData> jvdata = read_jv_levels_from_file( JVFile );
+
+        //   std::string JVPFile = "JV_probs_O2-"+std::to_string(eState)+"_tr-"+std::to_string(static_cast<int>(temp_rot))+"_tv-"+std::to_string(static_cast<int>(temp_vib))+".txt";
+        //   std::ifstream JVPFileStream(JVPFile);
+
+        //   if (JVPFileStream.good()) {
+        //       cprobs = readJVProbsFile(species_name, eState,temp_rot, temp_vib);
+        //   }else{
+        //       cprobs = genCumulProb(species_name, jvdata,eState, temp_rot, temp_vib);
+        //   }
+        //   JVPFileStream.close();
+
+        // }
+        //prevEState = eState;
+        //auto [erot,xj,evib,xv] = particle->evibrot(jvdata,cprobs, ispecies,eState, temp_vib*tempscale,temp_rot*tempscale,random);
+
+        id = MAXSMALLINT*random->uniform();
+        particle->add_particle(id,ispecies,icell,x,v,erot,evib,eelec,xj,xv);
+
+        if (nfix_update_custom)
         modify->update_custom(particle->nlocal-1,temp_thermal,
-                             temp_rot,temp_vib,temp_elec,vstream);
+                              temp_rot,temp_vib,temp_elec,vstream);
+      }
+
+      // increment count without effect of density variation
+      // so that target insertion count is undisturbed
+
+      nprev += npercell;
     }
 
-    // increment count without effect of density variation
-    // so that target insertion count is undisturbed
+    delete random;
 
-    nprev += npercell;
-  }
-
-  delete random;
 }
 
 /* ----------------------------------------------------------------------
