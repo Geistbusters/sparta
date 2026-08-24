@@ -291,6 +291,8 @@ bool CollideMD::prepareFromParticles(CRDSConfig& config, CollisionData& collisio
     int ies;
     MDIntegrator::getEState(ies, eelec_atom, eelec_diatom);
 
+    collision.integration.initial_electronic_state = ies;
+
     // 5. Extract Rotational (J) and Vibrational (V) states
     // (If both were somehow atoms, xj and xv would default to 0.0 from SPARTA)
     double xj = sparta_diatom->xj;
@@ -299,7 +301,7 @@ bool CollideMD::prepareFromParticles(CRDSConfig& config, CollisionData& collisio
     // 6. Pass everything over the bridge to the MD library!
     // This utilizes your new QCT::prepareFromPreSampled function
     return QCT::prepareFromPreSampled(config, collision, p1_name, p2_name, 
-                                      rel_vel, ies, xj, xv, comm->me);
+                                      rel_vel, collision.integration.initial_electronic_state, xj, xv, comm->me);
 }
 
 
@@ -1837,8 +1839,8 @@ int CollideMD::analyzeOutcome(const CollisionData& collision) {
 }
 
 
-bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart* sparta_p1, 
-                           Particle::OnePart* sparta_p2, Particle::OnePart* sparta_p3) {
+bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart*& sparta_p1, 
+                           Particle::OnePart*& sparta_p2, Particle::OnePart*& sparta_p3) {
 
     if (!collision.success) {
         std::cerr << "Warning: Updating SPARTA from failed collision" << std::endl;
@@ -1889,7 +1891,9 @@ bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart* sparta_p
             double suvr_mag = sqrt(dotProduct(new_sparta_uvrel, new_sparta_uvrel));
             for (int i = 0; i < 3; i++) new_sparta_uvrel[i] /= suvr_mag;
 
-            double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
+            double safe_etr = std::max(0.0, collision.final_state.etr);
+            double v_rel_final_au = sqrt(2.0 * safe_etr / collision.mu_coll);
+            //double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
             double v_rel_final_mps = v_rel_final_au / Units::MPS_TO_AUVEL;
 
             double v_atom_mag = v_rel_final_mps * (m_diatom_kg / m_tot);
@@ -1926,7 +1930,9 @@ bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart* sparta_p
             double suvr_mag = sqrt(dotProduct(new_sparta_uvrel, new_sparta_uvrel));
             for (int i = 0; i < 3; i++) new_sparta_uvrel[i] /= suvr_mag;
 
-            double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
+            double safe_etr = std::max(0.0, collision.final_state.etr);
+            double v_rel_final_au = sqrt(2.0 * safe_etr / collision.mu_coll);
+            //double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
             double v_rel_final_mps = v_rel_final_au / Units::MPS_TO_AUVEL;
 
             double v_atom_mag = v_rel_final_mps * (m_diatom_kg / m_tot);
@@ -1980,7 +1986,9 @@ bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart* sparta_p
             for (int i = 0; i < 3; i++) new_sparta_uvrel[i] /= suvr_mag;
 
             // Use the UPDATED mu_coll in case the species masses changed during exchange
-            double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
+            double safe_etr = std::max(0.0, collision.final_state.etr);
+            double v_rel_final_au = sqrt(2.0 * safe_etr / collision.mu_coll);
+            //double v_rel_final_au = sqrt(2.0 * collision.final_state.etr / collision.mu_coll);
             double v_rel_final_mps = v_rel_final_au / Units::MPS_TO_AUVEL;
 
             double v_atom_mag = v_rel_final_mps * (m_diatom_kg / m_tot);
@@ -2086,7 +2094,7 @@ bool CollideMD::updateColl(CollisionData& collision, Particle::OnePart* sparta_p
             sparta_p3->ispecies = atom_species_idx; 
             sparta_p3->icell = sparta_diatom->icell;
             for (int i = 0; i < 3; i++) {
-                sparta_p3->x[i] = 0.0; // Handled by SPARTA position advection later
+                //sparta_p3->x[i] = 0.0; // Handled by SPARTA position advection later
                 sparta_p3->v[i] = v_com[i] + v3[i];
             }
             
@@ -2642,6 +2650,7 @@ bool CollideMD::runCollision(
     if (success) success &= QCT::finalize(collision);
    
     // Update SPARTA particles from MD results
+    sparta_p3 = nullptr;
     if (success) success &= this->updateColl(collision, sparta_p1, sparta_p2, sparta_p3);
 
 

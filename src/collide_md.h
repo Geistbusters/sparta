@@ -120,18 +120,18 @@ bool prepareFromParticles(CRDSConfig& config, CollisionData& collision,
   int perform_collision(Particle::OnePart *&, Particle::OnePart *&, Particle::OnePart *&) override;
 
 
-    bool updateColl(CollisionData& collision, Particle::OnePart* sparta_p1, 
-                       Particle::OnePart* sparta_p2,
-                       Particle::OnePart* sparta_p3 = nullptr ) ;
+    bool updateColl(CollisionData& collision, Particle::OnePart*& sparta_p1, 
+                       Particle::OnePart*& sparta_p2,
+                       Particle::OnePart*& sparta_p3 ) ;
 
 #else  
 
   void setup_collision(Particle::OnePart *, Particle::OnePart *) ;
   
   int perform_collision(Particle::OnePart *&, Particle::OnePart *&, Particle::OnePart *&) ;
-   bool updateColl(CollisionData& collision, Particle::OnePart* sparta_p1, 
-                       Particle::OnePart* sparta_p2,
-                       Particle::OnePart* sparta_p3 = nullptr ) ;
+   bool updateColl(CollisionData& collision, Particle::OnePart*& sparta_p1, 
+                       Particle::OnePart*& sparta_p2,
+                       Particle::OnePart*& sparta_p3) ;
 
 #endif 
   CollideMD();
